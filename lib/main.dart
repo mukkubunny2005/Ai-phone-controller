@@ -40,7 +40,7 @@ class _AssistantPageState extends State<AssistantPage> {
   final _input = TextEditingController();
   final _scroll = ScrollController();
   final List<ChatMessage> _messages = [
-    const ChatMessage('AI Phone Controller ready. Try “open Chrome”, “read screen”, or a sequence such as “open Chrome then read screen then back”. Each action is confirmed separately.', fromUser: false),
+    const ChatMessage('AI Phone Controller ready. Try “open Chrome”, “read screen”, or natural-language tasks after loading the offline AI model with the brain icon. Every action is confirmed.', fromUser: false),
   ];
   bool _busy = false;
   bool _workflowRunning = false;
@@ -94,7 +94,7 @@ class _AssistantPageState extends State<AssistantPage> {
         return;
       }
       if (normalized == 'help' || normalized == 'what can you do') {
-        _add('Single actions: open an installed app by its displayed name, read screen, back. Multi-step: join actions with “then”, for example “open Chrome then read screen then back”. You can also use “tap 4” or “enter 4 hello” after reading the current screen. Each step is confirmed. Maximum 8 steps per workflow.', fromUser: false);
+        _add('Single actions: open an installed app by its displayed name, read screen, back. Multi-step: join actions with “then”, for example “open Chrome then read screen then back”. You can also use “tap 4” or “enter 4 hello” after reading the current screen. For natural-language tasks, load the offline AI model with the brain icon. Each action is confirmed. Maximum 8 steps.', fromUser: false);
         return;
       }
       final steps = _splitWorkflow(text);
@@ -171,14 +171,15 @@ class _AssistantPageState extends State<AssistantPage> {
           installedApps = await _native.invokeListMethod<dynamic>('getLaunchableApps') ?? [];
         } catch (_) {}
 
-        final screenDescription = visible.map((raw) {
+        final screenDescription = visible.take(45).map((raw) {
           final item = Map<String, dynamic>.from(raw as Map);
-          return '${item['index']}: ${item['label']} [clickable=${item['clickable'] == true}, editable=${item['editable'] == true}]';
+          final label = (item['label'] ?? '').toString();
+          return '${item['index']}: ${label.length > 90 ? label.substring(0, 90) : label} [clickable=${item['clickable'] == true}, editable=${item['editable'] == true}]';
         }).join('\n');
         final appNames = installedApps
             .map((raw) => (Map<String, dynamic>.from(raw as Map)['label'] ?? '').toString())
             .where((name) => name.isNotEmpty)
-            .take(180)
+            .take(100)
             .join(', ');
 
         final prompt = '''
@@ -222,6 +223,10 @@ Rules:
           return;
         }
 
+        if (_cancelWorkflow) {
+          _add('AI automation cancelled. No action was executed from the pending plan.', fromUser: false);
+          return;
+        }
         final first = raw.indexOf('{');
         final last = raw.lastIndexOf('}');
         if (first < 0 || last <= first) {
