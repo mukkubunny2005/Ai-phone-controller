@@ -5,8 +5,8 @@ import android.view.accessibility.AccessibilityEvent
 import android.util.Log
 
 /**
- * Minimal opt-in foundation. It only observes foreground window package changes.
- * It does not capture screenshots, read typed content, or perform clicks.
+ * Opt-in foundation: observes foreground window package changes only.
+ * No screenshots, text extraction, credential collection, or automated clicks.
  */
 class AiAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
