@@ -256,7 +256,7 @@ Rules:
         }
 
         final tap = RegExp(r'^tap ([0-9]+)$').firstMatch(command);
-        final enter = RegExp(r'^enter ([0-9]+) ([\\s\\S]+)$').firstMatch(command);
+        final enter = RegExp(r'^enter ([0-9]+) (.+)$').firstMatch(command);
         if (tap != null) {
           final item = findVisibleElement(int.parse(tap.group(1)!));
           if (item == null || item['clickable'] != true) {
