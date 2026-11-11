@@ -68,7 +68,7 @@ class _AssistantPageState extends State<AssistantPage> {
 
   bool _isRestrictedIntent(String value) {
     return RegExp(
-      r'\\b(gambling|casino|sports betting|betting|poker|pornography|porn|adult content|weapon|firearm|gun|knife|vape|cigarette|tobacco|drugs?|marijuana|alcohol|dangerous challenge|stunt)\\b',
+      r'\b(gambling|casino|sports betting|betting|poker|pornography|porn|adult content|weapon|firearm|gun|knife|vape|cigarette|tobacco|drugs?|marijuana|alcohol|dangerous challenge|stunt)\b',
       caseSensitive: false,
     ).hasMatch(value);
   }
