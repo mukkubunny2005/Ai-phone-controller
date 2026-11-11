@@ -191,19 +191,6 @@ class _AssistantPageState extends State<AssistantPage> {
     }
   }
 
-  Future<bool> _launch(String app) async {
-    try {
-      final opened = await _native.invokeMethod<bool>('launchApp', <String, String>{'packageName': _apps[app]!});
-      _add(opened == true ? 'Opened ${app[0].toUpperCase()}${app.substring(1)}.' : 'That app is not installed or Android could not open it.', fromUser: false);
-      return opened == true;
-    } on PlatformException catch (e) {
-      _add('Android error: ${e.message ?? 'Unable to launch app'}.', fromUser: false);
-      return false;
-    } on MissingPluginException {
-      _add('Android bridge is unavailable. Run this on an Android build.', fromUser: false);
-      return false;
-    }
-  }
 
   Future<bool> _tapIndex(int index) async {
     final approved = await _confirm('Tap visible element number $index? Make sure it is the intended control.');
