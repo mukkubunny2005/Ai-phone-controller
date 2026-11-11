@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'command_parser.dart';
+
 void main() => runApp(const AiPhoneControllerApp());
 
 class AiPhoneControllerApp extends StatelessWidget {
@@ -39,6 +41,7 @@ class _AssistantPageState extends State<AssistantPage> {
     const ChatMessage('AI Phone Controller ready. Try “open Chrome”, “read screen”, or a sequence such as “open Chrome then read screen then back”. Each action is confirmed separately.', fromUser: false),
   ];
   bool _busy = false;
+  bool _workflowRunning = false;
   bool _cancelWorkflow = false;
 
   static const _apps = <String, String>{
@@ -59,7 +62,7 @@ class _AssistantPageState extends State<AssistantPage> {
     });
   }
 
-  String _normalize(String value) => value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9 ]'), ' ').replaceAll(RegExp(r'\\s+'), ' ').trim();
+  String _normalize(String value) => AutomationCommandParser.normalize(value);
 
   Future<void> _send([String? preset]) async {
     final text = (preset ?? _input.text).trim();
@@ -93,8 +96,7 @@ class _AssistantPageState extends State<AssistantPage> {
   }
 
   List<String> _splitWorkflow(String text) {
-    final parts = text.split(RegExp(r'\\s+(?:then|and then)\\s+|\\s*;\\s*'));
-    return parts.map((part) => part.trim()).where((part) => part.isNotEmpty).toList();
+    return AutomationCommandParser.split(text);
   }
 
   Future<void> _runWorkflow(List<String> steps) async {
@@ -108,20 +110,24 @@ class _AssistantPageState extends State<AssistantPage> {
       return;
     }
     _cancelWorkflow = false;
+    _workflowRunning = true;
     _add('Starting workflow with ${steps.length} steps. You will confirm each action separately.', fromUser: false);
     for (var i = 0; i < steps.length; i++) {
       if (_cancelWorkflow || !mounted) {
         _add('Workflow cancelled. Remaining steps were skipped.', fromUser: false);
+        _workflowRunning = false;
         return;
       }
       _add('Step ${i + 1}/${steps.length}: ${steps[i]}', fromUser: false);
       final success = await _runStep(steps[i], workflow: true);
       if (!success) {
         _add('Workflow stopped at step ${i + 1}. Remaining steps were not run.', fromUser: false);
+        _workflowRunning = false;
         return;
       }
     }
     _add('Workflow finished.', fromUser: false);
+    _workflowRunning = false;
   }
 
   bool _isSupportedStep(String step) {
@@ -341,8 +347,8 @@ class _AssistantPageState extends State<AssistantPage> {
           ]),
           actions: [
             IconButton(tooltip: 'Accessibility settings', onPressed: _serviceStatus, icon: const Icon(Icons.accessibility_new)),
-            IconButton(tooltip: 'Read screen', onPressed: _readScreen, icon: const Icon(Icons.document_scanner_outlined)),
-            IconButton(tooltip: 'Cancel workflow', onPressed: () { _cancelWorkflow = true; _add('Workflow cancellation requested.', fromUser: false); }, icon: const Icon(Icons.stop_circle_outlined)),
+            IconButton(tooltip: 'Read screen', onPressed: _busy ? null : _readScreen, icon: const Icon(Icons.document_scanner_outlined)),
+            if (_workflowRunning) IconButton(tooltip: 'Cancel workflow', onPressed: () { _cancelWorkflow = true; _add('Workflow cancellation requested.', fromUser: false); }, icon: const Icon(Icons.stop_circle_outlined)),
           ],
         ),
         body: Column(children: [
