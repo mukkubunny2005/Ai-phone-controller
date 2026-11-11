@@ -81,7 +81,7 @@ class _AssistantPageState extends State<AssistantPage> {
         return;
       }
       if (normalized == 'help' || normalized == 'what can you do') {
-        _add('Single actions: open Chrome/YouTube/Settings/Maps/Calculator, read screen, back. Multi-step: join actions with “then”, for example “open Chrome then read screen then back”. You can also use “tap 4” or “enter 4 hello” after reading the current screen. Each step is confirmed. Maximum 8 steps per workflow.', fromUser: false);
+        _add('Single actions: open an installed app by its displayed name, read screen, back. Multi-step: join actions with “then”, for example “open Chrome then read screen then back”. You can also use “tap 4” or “enter 4 hello” after reading the current screen. Each step is confirmed. Maximum 8 steps per workflow.', fromUser: false);
         return;
       }
       final steps = _splitWorkflow(normalized);
@@ -110,12 +110,12 @@ class _AssistantPageState extends State<AssistantPage> {
       return;
     }
     _cancelWorkflow = false;
-    _workflowRunning = true;
+    setState(() => _workflowRunning = true);
     _add('Starting workflow with ${steps.length} steps. You will confirm each action separately.', fromUser: false);
     for (var i = 0; i < steps.length; i++) {
       if (_cancelWorkflow || !mounted) {
         _add('Workflow cancelled. Remaining steps were skipped.', fromUser: false);
-        _workflowRunning = false;
+        if (mounted) setState(() => _workflowRunning = false);
         return;
       }
       _add('Step ${i + 1}/${steps.length}: ${steps[i]}', fromUser: false);
@@ -127,12 +127,12 @@ class _AssistantPageState extends State<AssistantPage> {
       }
     }
     _add('Workflow finished.', fromUser: false);
-    _workflowRunning = false;
+    if (mounted) setState(() => _workflowRunning = false);
   }
 
   bool _isSupportedStep(String step) {
     if (step == 'read screen' || step == 'show screen' || step == 'back' || step == 'go back') return true;
-    if (step.startsWith('open ') && _apps.containsKey(step.substring(5).trim())) return true;
+    if (step.startsWith('open ') && step.substring(5).trim().isNotEmpty) return true;
     if (RegExp(r'^tap [0-9]+$').hasMatch(step)) return true;
     return RegExp(r'^enter [0-9]+ .+$').hasMatch(step);
   }
@@ -147,16 +147,12 @@ class _AssistantPageState extends State<AssistantPage> {
     }
     if (command.startsWith('open ')) {
       final app = command.substring(5).trim();
-      if (!_apps.containsKey(app)) {
-        _add('Unsupported app: $app. Allowed apps: ${_apps.keys.join(', ')}.', fromUser: false);
-        return false;
-      }
-      final approved = await _confirm('Open ${app[0].toUpperCase()}${app.substring(1)}?');
+      final approved = await _confirm('Open the installed app "$app"?');
       if (!approved) {
         _add('Step cancelled.', fromUser: false);
         return false;
       }
-      return _launch(app);
+      return _launchByName(app);
     }
     final tapMatch = RegExp(r'^tap ([0-9]+)$').firstMatch(command);
     if (tapMatch != null) return _tapIndex(int.parse(tapMatch.group(1)!));
@@ -179,6 +175,20 @@ class _AssistantPageState extends State<AssistantPage> {
       ),
     );
     return result == true;
+  }
+
+  Future<bool> _launchByName(String appName) async {
+    try {
+      final opened = await _native.invokeMethod<bool>('launchAppByName', <String, String>{'appName': appName});
+      _add(opened == true ? 'Opened $appName.' : 'Could not find an installed app named "$appName". Check the app name and try again.', fromUser: false);
+      return opened == true;
+    } on PlatformException catch (e) {
+      _add('Android error: ${e.message ?? 'Unable to launch app'}.', fromUser: false);
+      return false;
+    } on MissingPluginException {
+      _add('App launching is available in the Android app build.', fromUser: false);
+      return false;
+    }
   }
 
   Future<bool> _launch(String app) async {
