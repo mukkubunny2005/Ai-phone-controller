@@ -435,7 +435,7 @@ Rules:
           final state = (status['downloadState'] ?? 'idle').toString();
           final bytes = (status['bytesDownloaded'] as num?)?.toInt() ?? 0;
           final total = (status['totalBytes'] as num?)?.toInt() ?? 0;
-          final progress = total > 0 ? (bytes / total).clamp(0.0, 1.0) : null;
+          final progress = total > 0 ? (bytes / total).clamp(0.0, 1.0).toDouble() : null;
 
           Future<void> refresh() async {
             final updated = await _native.invokeMapMethod<String, dynamic>('getAiModelStatus');
@@ -966,16 +966,18 @@ Rules:
 , dotAll: true).firstMatch(command);
         if (tap != null) {
           final index = int.parse(tap.group(1)!);
-          final item = visible.cast<dynamic>().map((raw) => Map<String, dynamic>.from(raw as Map))
-              .where((item) => item['index'] == index).firstOrNull;
+          final matches = visible.map((raw) => Map<String, dynamic>.from(raw as Map))
+              .where((item) => item['index'] == index).toList();
+          final item = matches.isEmpty ? null : matches.first;
           if (item == null || item['clickable'] != true) {
             _add('The AI selected a control that is not currently visible and clickable. No action was executed.', fromUser: false);
             return;
           }
         } else if (enter != null) {
           final index = int.parse(enter.group(1)!);
-          final item = visible.cast<dynamic>().map((raw) => Map<String, dynamic>.from(raw as Map))
-              .where((item) => item['index'] == index).firstOrNull;
+          final matches = visible.map((raw) => Map<String, dynamic>.from(raw as Map))
+              .where((item) => item['index'] == index).toList();
+          final item = matches.isEmpty ? null : matches.first;
           if (item == null || item['editable'] != true) {
             _add('The AI selected a field that is not currently visible and editable. No text was entered.', fromUser: false);
             return;
@@ -998,6 +1000,7 @@ Rules:
           return;
         }
         completed.add(command);
+        await Future<void>.delayed(const Duration(milliseconds: 900));
       }
       _add('Stopped after 8 actions. Review the current screen before starting another task.', fromUser: false);
     } finally {
