@@ -40,16 +40,20 @@ class OfflineAiRuntime(private val modelFile: File) {
                 createdEngine = newEngine
                 runBlocking { newEngine.initialize() }
                 initialized = true
-                val createdConversation = newEngine.createConversation(
+                val createdConversation = runBlocking {
+                    newEngine.createConversation(
                     ConversationConfig(
                         systemInstruction = Contents.of(
                             "You are the offline assistant inside AI Phone Controller. " +
-                                "Help the user plan safe Android app tasks. Never claim you performed an action. " +
+                                "Help with ordinary Android tasks and general questions. Never claim you performed an action. " +
+                                "Do not help access weapons, drugs, intoxicants, gambling, pornography, or dangerous challenges, and never bypass age restrictions. " +
+                                "Do not request passwords, one-time codes, or payment credentials. " +
                                 "When asked for automation plans, output only the requested JSON."
                         ),
                         samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.2),
                     )
-                )
+                    )
+                }
                 engine = newEngine
                 conversation = createdConversation
                 ready = true
