@@ -158,14 +158,17 @@ class _AssistantPageState extends State<AssistantPage> {
         List<dynamic> installedApps = [];
         try {
           installedApps = await _native.invokeListMethod<dynamic>('getLaunchableApps') ?? [];
-        } catch (_) { }
+        } catch (_) {}
 
         final screenDescription = visible.map((raw) {
           final item = Map<String, dynamic>.from(raw as Map);
           return '${item['index']}: ${item['label']} [clickable=${item['clickable'] == true}, editable=${item['editable'] == true}]';
         }).join('\n');
-        final appNames = installedApps.map((raw) =>
-            (Map<String, dynamic>.from(raw as Map)['label'] ?? '').toString()).where((name) => name.isNotEmpty).take(180).join(', ');
+        final appNames = installedApps
+            .map((raw) => (Map<String, dynamic>.from(raw as Map)['label'] ?? '').toString())
+            .where((name) => name.isNotEmpty)
+            .take(180)
+            .join(', ');
 
         final prompt = '''
 You are the task planner for an Android phone controller. Work only with the user's current request.
@@ -177,7 +180,7 @@ INSTALLED APP NAMES:
 ${appNames.isEmpty ? '(not available)' : appNames}
 
 Return exactly one JSON object and no markdown.
-Choose exactly one of these formats:
+Choose exactly one format:
 {"action":"open exact installed app name"}
 {"action":"tap visible element index"}
 {"action":"enter visible editable element index exact text"}
@@ -187,15 +190,17 @@ Choose exactly one of these formats:
 {"clarification":"one question or explain what is missing"}
 
 Rules:
-- Plan only ONE next action at a time. The app will show the user a confirmation before every tap, text entry, app launch, or Back action.
-- Only use app names from the installed app list.
-- For tap, use an index from the CURRENT accessible screen and only if clickable=true.
-- For enter, use an index from the CURRENT accessible screen and only if editable=true.
-- Never guess an element index or claim an action was performed.
-- If the current screen does not show the required control, ask for clarification or choose a safe next step.
-- Maximum total actions is 8. Stop when the task is complete.
+- Plan only ONE next action at a time.
+- The app asks the user to confirm every app launch, tap, text entry, and Back action.
+- Use only app names from the installed app list.
+- For tap, use a current index whose clickable value is true.
+- For enter, use a current index whose editable value is true.
+- Never guess an index or claim an action was performed.
+- If the required control is not visible, ask for clarification or choose a safe next step.
+- Stop when the task is complete. Maximum 8 actions.
 - Do not repeat an action already completed unless the current screen clearly requires it.
 ''';
+
         String raw;
         try {
           raw = await _native.invokeMethod<String>('generateAiResponse', {'prompt': prompt}) ?? '';
@@ -205,6 +210,7 @@ Rules:
               : 'Offline AI error: ${error.message ?? error.code}.', fromUser: false);
           return;
         }
+
         final first = raw.indexOf('{');
         final last = raw.lastIndexOf('}');
         if (first < 0 || last <= first) {
@@ -231,761 +237,42 @@ Rules:
           return;
         }
         if (plan['done'] == true) {
-          final message = (plan['message'] ?? 'Task finished.').toString();
-          _add(message, fromUser: false);
+          _add((plan['message'] ?? 'Task finished.').toString(), fromUser: false);
           return;
         }
 
-        final action = plan['action'];
-        if (action is! String || !_isSupportedStep(action.trim())) {
+        final rawAction = plan['action'];
+        if (rawAction is! String || !_isSupportedStep(rawAction.trim())) {
           _add('The offline model proposed an unsupported action. Nothing was executed.', fromUser: false);
           return;
         }
-        final command = action.trim();
-        final tap = RegExp(r'^tap ([0-9]+)
-    if (step == 'read screen' || step == 'show screen' || step == 'back' || step == 'go back') return true;
-    if (step.startsWith('open ') && step.substring(5).trim().isNotEmpty) return true;
-    if (RegExp(r'^tap [0-9]+$').hasMatch(step)) return true;
-    return RegExp(r'^enter [0-9]+ .+$').hasMatch(step);
-  }
-
-  Future<bool> _runStep(String command, {bool workflow = false}) async {
-    if (command == 'read screen' || command == 'show screen') {
-      await _readScreen();
-      return true;
-    }
-    if (command == 'back' || command == 'go back') {
-      return _goBack(confirm: true);
-    }
-    if (command.startsWith('open ')) {
-      final app = command.substring(5).trim();
-      final approved = await _confirm('Open the installed app "$app"?');
-      if (!approved) {
-        _add('Step cancelled.', fromUser: false);
-        return false;
-      }
-      return _launchByName(app);
-    }
-    final tapMatch = RegExp(r'^tap ([0-9]+)$').firstMatch(command);
-    if (tapMatch != null) return _tapIndex(int.parse(tapMatch.group(1)!));
-    final enterMatch = RegExp(r'^enter ([0-9]+) (.+)$').firstMatch(command);
-    if (enterMatch != null) return _enterIndex(int.parse(enterMatch.group(1)!), enterMatch.group(2)!);
-    _add('Unsupported command. Type “help”.', fromUser: false);
-    return false;
-  }
-
-  Future<bool> _confirm(String message) async {
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Confirm action'),
-        content: Text(message),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Confirm')),
-        ],
-      ),
-    );
-    return result == true;
-  }
-
-  Future<bool> _launchByName(String appName) async {
-    try {
-      final opened = await _native.invokeMethod<bool>('launchAppByName', <String, String>{'appName': appName});
-      _add(opened == true ? 'Opened $appName.' : 'Could not find an installed app named "$appName". Check the app name and try again.', fromUser: false);
-      return opened == true;
-    } on PlatformException catch (e) {
-      _add('Android error: ${e.message ?? 'Unable to launch app'}.', fromUser: false);
-      return false;
-    } on MissingPluginException {
-      _add('App launching is available in the Android app build.', fromUser: false);
-      return false;
-    }
-  }
-
-
-  Future<bool> _tapIndex(int index) async {
-    final approved = await _confirm('Tap visible element number $index? Make sure it is the intended control.');
-    if (!approved) return false;
-    try {
-      final ok = await _native.invokeMethod<bool>('clickElement', {'index': index});
-      _add(ok == true ? 'Tapped element $index.' : 'Tap failed. Read screen again because the app may have changed.', fromUser: false);
-      return ok == true;
-    } on PlatformException catch (e) {
-      _add(e.message ?? 'Tap failed.', fromUser: false);
-      return false;
-    }
-  }
-
-  Future<bool> _enterIndex(int index, String value) async {
-    final approved = await _confirm('Enter the text you supplied into visible field $index?');
-    if (!approved) return false;
-    try {
-      final ok = await _native.invokeMethod<bool>('enterText', {'index': index, 'text': value});
-      _add(ok == true ? 'Text entered into field $index.' : 'Text entry failed. Read screen again.', fromUser: false);
-      return ok == true;
-    } on PlatformException catch (e) {
-      _add(e.message ?? 'Text entry failed.', fromUser: false);
-      return false;
-    }
-  }
-
-  Future<void> _readScreen() async {
-    try {
-      final elements = await _native.invokeListMethod<dynamic>('readVisibleElements');
-      if (!mounted) return;
-      if (elements == null || elements.isEmpty) {
-        _add('No accessible elements found. Enable the Accessibility service and open an app with accessible controls.', fromUser: false);
-        return;
-      }
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: Text('Visible elements (${elements.length})'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView.separated(
-              shrinkWrap: true,
-              itemCount: elements.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
-              itemBuilder: (itemContext, index) {
-                final item = Map<String, dynamic>.from(elements[index] as Map);
-                final label = (item['label'] ?? 'Element').toString();
-                final elementIndex = item['index'] as int;
-                final clickable = item['clickable'] == true;
-                final editable = item['editable'] == true;
-                return ListTile(
-                  dense: true,
-                  title: Text('$elementIndex. $label', maxLines: 2, overflow: TextOverflow.ellipsis),
-                  subtitle: Text(editable ? 'Editable field' : clickable ? 'Clickable control' : 'Visible text'),
-                  trailing: editable ? const Icon(Icons.edit) : clickable ? const Icon(Icons.touch_app) : null,
-                  onTap: editable ? () async {
-                    Navigator.pop(dialogContext);
-                    final value = await _askText(label);
-                    if (value != null) await _enterIndex(elementIndex, value);
-                  } : clickable ? () async {
-                    Navigator.pop(dialogContext);
-                    await _tapIndex(elementIndex);
-                  } : null,
-                );
-              },
-            ),
-          ),
-          actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Close'))],
-        ),
-      );
-    } on PlatformException catch (e) {
-      _add(e.message ?? 'Could not read the screen. Enable Accessibility first.', fromUser: false);
-    } on MissingPluginException {
-      _add('Screen reading is available in the Android app build.', fromUser: false);
-    }
-  }
-
-  Future<String?> _askText(String label) async {
-    final controller = TextEditingController();
-    final result = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Enter text'),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text(label, maxLines: 2, overflow: TextOverflow.ellipsis),
-          const SizedBox(height: 12),
-          TextField(controller: controller, autofocus: true, maxLength: 2000),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, controller.text), child: const Text('Continue')),
-        ],
-      ),
-    );
-    controller.dispose();
-    return result;
-  }
-
-  Future<bool> _goBack({bool confirm = true}) async {
-    if (confirm && !await _confirm('Perform Android Back action?')) return false;
-    try {
-      final ok = await _native.invokeMethod<bool>('goBack');
-      _add(ok == true ? 'Went back.' : 'Back action unavailable. Enable Accessibility service first.', fromUser: false);
-      return ok == true;
-    } on PlatformException catch (e) {
-      _add(e.message ?? 'Back action failed.', fromUser: false);
-      return false;
-    }
-  }
-
-  Future<void> _showAiModelManager() async {
-    Map<String, dynamic> status = {};
-    var busy = false;
-    String? message;
-    try {
-      status = await _native.invokeMapMethod<String, dynamic>('getAiModelStatus') ?? {};
-    } on PlatformException catch (error) {
-      _add('Could not check offline AI model: ${error.message ?? error.code}.', fromUser: false);
-      return;
-    }
-    if (!mounted) return;
-
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (dialogContext, setDialogState) {
-          final downloaded = status['downloaded'] == true;
-          final loaded = status['loaded'] == true;
-          final state = (status['downloadState'] ?? 'idle').toString();
-          final bytes = (status['bytesDownloaded'] as num?)?.toInt() ?? 0;
-          final total = (status['totalBytes'] as num?)?.toInt() ?? 0;
-          final progress = total > 0 ? (bytes / total).clamp(0.0, 1.0).toDouble() : null;
-
-          Future<void> refresh() async {
-            final updated = await _native.invokeMapMethod<String, dynamic>('getAiModelStatus');
-            if (updated != null) setDialogState(() => status = updated);
+        final command = rawAction.trim();
+        Map<String, dynamic>? findVisibleElement(int index) {
+          for (final rawElement in visible) {
+            final element = Map<String, dynamic>.from(rawElement as Map);
+            if (element['index'] == index) return element;
           }
+          return null;
+        }
 
-          return AlertDialog(
-            title: const Text('Offline AI model'),
-            content: SizedBox(
-              width: 340,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Qwen2.5 1.5B Instruct · on-device'),
-                  const SizedBox(height: 8),
-                  Text(downloaded ? (loaded ? 'Model loaded and ready' : 'Model downloaded · not loaded') : 'Model download: $state'),
-                  if (!downloaded && (state == 'downloading' || state == 'pending' || state == 'paused')) ...[
-                    const SizedBox(height: 10),
-                    LinearProgressIndicator(value: progress),
-                    const SizedBox(height: 4),
-                    Text(total > 0 ? '${(bytes / 1024 / 1024).toStringAsFixed(0)} MB / ${(total / 1024 / 1024).toStringAsFixed(0)} MB' : 'Downloading…'),
-                  ],
-                  const SizedBox(height: 10),
-                  const Text('First download is about 1.6 GB and is restricted to Wi-Fi. The model runs locally after download.'),
-                  if (message != null) ...[
-                    const SizedBox(height: 8),
-                    Text(message!, style: const TextStyle(color: Colors.amber)),
-                  ],
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(onPressed: busy ? null : () => Navigator.pop(dialogContext), child: const Text('Close')),
-              if (!downloaded && (state == 'downloading' || state == 'pending' || state == 'paused'))
-                TextButton(
-                  onPressed: busy ? null : () async {
-                    setDialogState(() => busy = true);
-                    try {
-                      await _native.invokeMethod<bool>('cancelAiModelDownload');
-                      await refresh();
-                      setDialogState(() => message = 'Download cancelled.');
-                    } catch (error) {
-                      setDialogState(() => message = error.toString());
-                    } finally {
-                      setDialogState(() => busy = false);
-                    }
-                  },
-                  child: const Text('Cancel download'),
-                ),
-              TextButton(
-                onPressed: busy ? null : () async {
-                  setDialogState(() => busy = true);
-                  try {
-                    await refresh();
-                    setDialogState(() => message = 'Status refreshed.');
-                  } catch (error) {
-                    setDialogState(() => message = error.toString());
-                  } finally {
-                    setDialogState(() => busy = false);
-                  }
-                },
-                child: const Text('Refresh'),
-              ),
-              if (!downloaded && state != 'downloading' && state != 'pending')
-                FilledButton(
-                  onPressed: busy ? null : () async {
-                    final approved = await showDialog<bool>(
-                      context: dialogContext,
-                      builder: (confirmContext) => AlertDialog(
-                        title: const Text('Download offline AI?'),
-                        content: const Text('This downloads about 1.6 GB over Wi-Fi. It does not use mobile data. Continue?'),
-                        actions: [
-                          TextButton(onPressed: () => Navigator.pop(confirmContext, false), child: const Text('Not now')),
-                          FilledButton(onPressed: () => Navigator.pop(confirmContext, true), child: const Text('Download')),
-                        ],
-                      ),
-                    );
-                    if (approved != true) return;
-                    setDialogState(() => busy = true);
-                    try {
-                      await _native.invokeMethod<int>('downloadAiModel');
-                      await refresh();
-                      setDialogState(() => message = 'Download started. Android will show its progress in notifications.');
-                    } catch (error) {
-                      setDialogState(() => message = error.toString());
-                    } finally {
-                      setDialogState(() => busy = false);
-                    }
-                  },
-                  child: const Text('Download model'),
-                ),
-              if (downloaded && !loaded)
-                FilledButton(
-                  onPressed: busy ? null : () async {
-                    setDialogState(() { busy = true; message = 'Loading model… this can take several seconds.'; });
-                    try {
-                      await _native.invokeMethod<bool>('loadAiModel');
-                      await refresh();
-                      setDialogState(() => message = 'Offline AI is ready.');
-                    } catch (error) {
-                      setDialogState(() => message = 'Could not load model: $error');
-                    } finally {
-                      setDialogState(() => busy = false);
-                    }
-                  },
-                  child: Text(busy ? 'Loading…' : 'Load model'),
-                ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  Future<void> _serviceStatus() async {
-    try {
-      final status = await _native.invokeMethod<String>('getAccessibilityStatus');
-      if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Accessibility service'),
-          content: Text(status == 'enabled'
-              ? 'Enabled. The app reads the accessible foreground UI only when requested. Password fields are excluded; no screenshots are captured.'
-              : 'Not enabled. Turn on AI Phone Controller in Android Accessibility settings to read and interact with visible controls.'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Close')),
-            if (status != 'enabled') FilledButton(
-              onPressed: () async { Navigator.pop(dialogContext); await _native.invokeMethod('openAccessibilitySettings'); },
-              child: const Text('Open settings'),
-            ),
-          ],
-        ),
-      );
-    } on PlatformException catch (e) {
-      _add(e.message ?? 'Could not check accessibility status.', fromUser: false);
-    }
-  }
-
-  @override
-  void dispose() {
-    _input.dispose();
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(
-          title: const Row(children: [
-            Icon(Icons.auto_awesome, color: Color(0xFF9AA8FF)),
-            SizedBox(width: 10),
-            Text('AI Phone Controller', style: TextStyle(fontWeight: FontWeight.w600)),
-          ]),
-          actions: [
-            IconButton(tooltip: 'Offline AI model', onPressed: _showAiModelManager, icon: const Icon(Icons.psychology_alt_outlined)),
-            IconButton(tooltip: 'Accessibility settings', onPressed: _serviceStatus, icon: const Icon(Icons.accessibility_new)),
-            IconButton(tooltip: 'Read screen', onPressed: _busy ? null : _readScreen, icon: const Icon(Icons.document_scanner_outlined)),
-            if (_workflowRunning) IconButton(tooltip: 'Cancel workflow', onPressed: () { _cancelWorkflow = true; _add('Workflow cancellation requested.', fromUser: false); }, icon: const Icon(Icons.stop_circle_outlined)),
-          ],
-        ),
-        body: Column(children: [
-          Expanded(
-            child: ListView.builder(
-              controller: _scroll,
-              padding: const EdgeInsets.all(16),
-              itemCount: _messages.length,
-              itemBuilder: (context, index) {
-                final message = _messages[index];
-                return Align(
-                  alignment: message.fromUser ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Container(
-                    constraints: const BoxConstraints(maxWidth: 320),
-                    margin: const EdgeInsets.only(bottom: 12),
-                    padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: message.fromUser ? const Color(0xFF29345F) : const Color(0xFF171F30),
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: Colors.white.withValues(alpha: .06)),
-                    ),
-                    child: Text(message.text, style: const TextStyle(fontSize: 15, height: 1.4)),
-                  ),
-                );
-              },
-            ),
-          ),
-          SizedBox(
-            height: 44,
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              scrollDirection: Axis.horizontal,
-              children: [
-                for (final app in _apps.keys)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 7),
-                    child: ActionChip(label: Text(app[0].toUpperCase() + app.substring(1)), onPressed: _busy ? null : () => _send('open $app')),
-                  ),
-                ActionChip(label: const Text('Read screen'), onPressed: _busy ? null : () => _send('read screen')),
-              ],
-            ),
-          ),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-              child: Row(children: [
-                Expanded(
-                  child: TextField(
-                    controller: _input,
-                    minLines: 1,
-                    maxLines: 4,
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => _send(),
-                    decoration: InputDecoration(
-                      hintText: 'Try “open Chrome then read screen”…',
-                      filled: true,
-                      fillColor: const Color(0xFF151D2B),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(26), borderSide: BorderSide.none),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                IconButton.filled(
-                  onPressed: _busy ? null : () => _send(),
-                  icon: const Icon(Icons.arrow_upward_rounded),
-                  style: IconButton.styleFrom(backgroundColor: const Color(0xFF7888F5), foregroundColor: Colors.white, fixedSize: const Size(50, 50)),
-                ),
-              ]),
-            ),
-          ),
-        ]),
-      );
-}
-).firstMatch(command);
-        final enter = RegExp(r'^enter ([0-9]+) (.+)
-    if (step == 'read screen' || step == 'show screen' || step == 'back' || step == 'go back') return true;
-    if (step.startsWith('open ') && step.substring(5).trim().isNotEmpty) return true;
-    if (RegExp(r'^tap [0-9]+$').hasMatch(step)) return true;
-    return RegExp(r'^enter [0-9]+ .+$').hasMatch(step);
-  }
-
-  Future<bool> _runStep(String command, {bool workflow = false}) async {
-    if (command == 'read screen' || command == 'show screen') {
-      await _readScreen();
-      return true;
-    }
-    if (command == 'back' || command == 'go back') {
-      return _goBack(confirm: true);
-    }
-    if (command.startsWith('open ')) {
-      final app = command.substring(5).trim();
-      final approved = await _confirm('Open the installed app "$app"?');
-      if (!approved) {
-        _add('Step cancelled.', fromUser: false);
-        return false;
-      }
-      return _launchByName(app);
-    }
-    final tapMatch = RegExp(r'^tap ([0-9]+)$').firstMatch(command);
-    if (tapMatch != null) return _tapIndex(int.parse(tapMatch.group(1)!));
-    final enterMatch = RegExp(r'^enter ([0-9]+) (.+)$').firstMatch(command);
-    if (enterMatch != null) return _enterIndex(int.parse(enterMatch.group(1)!), enterMatch.group(2)!);
-    _add('Unsupported command. Type “help”.', fromUser: false);
-    return false;
-  }
-
-  Future<bool> _confirm(String message) async {
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Confirm action'),
-        content: Text(message),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Confirm')),
-        ],
-      ),
-    );
-    return result == true;
-  }
-
-  Future<bool> _launchByName(String appName) async {
-    try {
-      final opened = await _native.invokeMethod<bool>('launchAppByName', <String, String>{'appName': appName});
-      _add(opened == true ? 'Opened $appName.' : 'Could not find an installed app named "$appName". Check the app name and try again.', fromUser: false);
-      return opened == true;
-    } on PlatformException catch (e) {
-      _add('Android error: ${e.message ?? 'Unable to launch app'}.', fromUser: false);
-      return false;
-    } on MissingPluginException {
-      _add('App launching is available in the Android app build.', fromUser: false);
-      return false;
-    }
-  }
-
-
-  Future<bool> _tapIndex(int index) async {
-    final approved = await _confirm('Tap visible element number $index? Make sure it is the intended control.');
-    if (!approved) return false;
-    try {
-      final ok = await _native.invokeMethod<bool>('clickElement', {'index': index});
-      _add(ok == true ? 'Tapped element $index.' : 'Tap failed. Read screen again because the app may have changed.', fromUser: false);
-      return ok == true;
-    } on PlatformException catch (e) {
-      _add(e.message ?? 'Tap failed.', fromUser: false);
-      return false;
-    }
-  }
-
-  Future<bool> _enterIndex(int index, String value) async {
-    final approved = await _confirm('Enter the text you supplied into visible field $index?');
-    if (!approved) return false;
-    try {
-      final ok = await _native.invokeMethod<bool>('enterText', {'index': index, 'text': value});
-      _add(ok == true ? 'Text entered into field $index.' : 'Text entry failed. Read screen again.', fromUser: false);
-      return ok == true;
-    } on PlatformException catch (e) {
-      _add(e.message ?? 'Text entry failed.', fromUser: false);
-      return false;
-    }
-  }
-
-  Future<void> _readScreen() async {
-    try {
-      final elements = await _native.invokeListMethod<dynamic>('readVisibleElements');
-      if (!mounted) return;
-      if (elements == null || elements.isEmpty) {
-        _add('No accessible elements found. Enable the Accessibility service and open an app with accessible controls.', fromUser: false);
-        return;
-      }
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: Text('Visible elements (${elements.length})'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView.separated(
-              shrinkWrap: true,
-              itemCount: elements.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
-              itemBuilder: (itemContext, index) {
-                final item = Map<String, dynamic>.from(elements[index] as Map);
-                final label = (item['label'] ?? 'Element').toString();
-                final elementIndex = item['index'] as int;
-                final clickable = item['clickable'] == true;
-                final editable = item['editable'] == true;
-                return ListTile(
-                  dense: true,
-                  title: Text('$elementIndex. $label', maxLines: 2, overflow: TextOverflow.ellipsis),
-                  subtitle: Text(editable ? 'Editable field' : clickable ? 'Clickable control' : 'Visible text'),
-                  trailing: editable ? const Icon(Icons.edit) : clickable ? const Icon(Icons.touch_app) : null,
-                  onTap: editable ? () async {
-                    Navigator.pop(dialogContext);
-                    final value = await _askText(label);
-                    if (value != null) await _enterIndex(elementIndex, value);
-                  } : clickable ? () async {
-                    Navigator.pop(dialogContext);
-                    await _tapIndex(elementIndex);
-                  } : null,
-                );
-              },
-            ),
-          ),
-          actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Close'))],
-        ),
-      );
-    } on PlatformException catch (e) {
-      _add(e.message ?? 'Could not read the screen. Enable Accessibility first.', fromUser: false);
-    } on MissingPluginException {
-      _add('Screen reading is available in the Android app build.', fromUser: false);
-    }
-  }
-
-  Future<String?> _askText(String label) async {
-    final controller = TextEditingController();
-    final result = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Enter text'),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text(label, maxLines: 2, overflow: TextOverflow.ellipsis),
-          const SizedBox(height: 12),
-          TextField(controller: controller, autofocus: true, maxLength: 2000),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, controller.text), child: const Text('Continue')),
-        ],
-      ),
-    );
-    controller.dispose();
-    return result;
-  }
-
-  Future<bool> _goBack({bool confirm = true}) async {
-    if (confirm && !await _confirm('Perform Android Back action?')) return false;
-    try {
-      final ok = await _native.invokeMethod<bool>('goBack');
-      _add(ok == true ? 'Went back.' : 'Back action unavailable. Enable Accessibility service first.', fromUser: false);
-      return ok == true;
-    } on PlatformException catch (e) {
-      _add(e.message ?? 'Back action failed.', fromUser: false);
-      return false;
-    }
-  }
-
-  Future<void> _serviceStatus() async {
-    try {
-      final status = await _native.invokeMethod<String>('getAccessibilityStatus');
-      if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Accessibility service'),
-          content: Text(status == 'enabled'
-              ? 'Enabled. The app reads the accessible foreground UI only when requested. Password fields are excluded; no screenshots are captured.'
-              : 'Not enabled. Turn on AI Phone Controller in Android Accessibility settings to read and interact with visible controls.'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Close')),
-            if (status != 'enabled') FilledButton(
-              onPressed: () async { Navigator.pop(dialogContext); await _native.invokeMethod('openAccessibilitySettings'); },
-              child: const Text('Open settings'),
-            ),
-          ],
-        ),
-      );
-    } on PlatformException catch (e) {
-      _add(e.message ?? 'Could not check accessibility status.', fromUser: false);
-    }
-  }
-
-  @override
-  void dispose() {
-    _input.dispose();
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(
-          title: const Row(children: [
-            Icon(Icons.auto_awesome, color: Color(0xFF9AA8FF)),
-            SizedBox(width: 10),
-            Text('AI Phone Controller', style: TextStyle(fontWeight: FontWeight.w600)),
-          ]),
-          actions: [
-            IconButton(tooltip: 'Accessibility settings', onPressed: _serviceStatus, icon: const Icon(Icons.accessibility_new)),
-            IconButton(tooltip: 'Read screen', onPressed: _busy ? null : _readScreen, icon: const Icon(Icons.document_scanner_outlined)),
-            if (_workflowRunning) IconButton(tooltip: 'Cancel workflow', onPressed: () { _cancelWorkflow = true; _add('Workflow cancellation requested.', fromUser: false); }, icon: const Icon(Icons.stop_circle_outlined)),
-          ],
-        ),
-        body: Column(children: [
-          Expanded(
-            child: ListView.builder(
-              controller: _scroll,
-              padding: const EdgeInsets.all(16),
-              itemCount: _messages.length,
-              itemBuilder: (context, index) {
-                final message = _messages[index];
-                return Align(
-                  alignment: message.fromUser ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Container(
-                    constraints: const BoxConstraints(maxWidth: 320),
-                    margin: const EdgeInsets.only(bottom: 12),
-                    padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: message.fromUser ? const Color(0xFF29345F) : const Color(0xFF171F30),
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: Colors.white.withValues(alpha: .06)),
-                    ),
-                    child: Text(message.text, style: const TextStyle(fontSize: 15, height: 1.4)),
-                  ),
-                );
-              },
-            ),
-          ),
-          SizedBox(
-            height: 44,
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              scrollDirection: Axis.horizontal,
-              children: [
-                for (final app in _apps.keys)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 7),
-                    child: ActionChip(label: Text(app[0].toUpperCase() + app.substring(1)), onPressed: _busy ? null : () => _send('open $app')),
-                  ),
-                ActionChip(label: const Text('Read screen'), onPressed: _busy ? null : () => _send('read screen')),
-              ],
-            ),
-          ),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-              child: Row(children: [
-                Expanded(
-                  child: TextField(
-                    controller: _input,
-                    minLines: 1,
-                    maxLines: 4,
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => _send(),
-                    decoration: InputDecoration(
-                      hintText: 'Try “open Chrome then read screen”…',
-                      filled: true,
-                      fillColor: const Color(0xFF151D2B),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(26), borderSide: BorderSide.none),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                IconButton.filled(
-                  onPressed: _busy ? null : () => _send(),
-                  icon: const Icon(Icons.arrow_upward_rounded),
-                  style: IconButton.styleFrom(backgroundColor: const Color(0xFF7888F5), foregroundColor: Colors.white, fixedSize: const Size(50, 50)),
-                ),
-              ]),
-            ),
-          ),
-        ]),
-      );
-}
-, dotAll: true).firstMatch(command);
+        final tap = RegExp(r'^tap ([0-9]+)$').firstMatch(command);
+        final enter = RegExp(r'^enter ([0-9]+) (.+)$', dotAll: true).firstMatch(command);
         if (tap != null) {
-          final index = int.parse(tap.group(1)!);
-          final matches = visible.map((raw) => Map<String, dynamic>.from(raw as Map))
-              .where((item) => item['index'] == index).toList();
-          final item = matches.isEmpty ? null : matches.first;
+          final item = findVisibleElement(int.parse(tap.group(1)!));
           if (item == null || item['clickable'] != true) {
             _add('The AI selected a control that is not currently visible and clickable. No action was executed.', fromUser: false);
             return;
           }
         } else if (enter != null) {
-          final index = int.parse(enter.group(1)!);
-          final matches = visible.map((raw) => Map<String, dynamic>.from(raw as Map))
-              .where((item) => item['index'] == index).toList();
-          final item = matches.isEmpty ? null : matches.first;
+          final item = findVisibleElement(int.parse(enter.group(1)!));
           if (item == null || item['editable'] != true) {
             _add('The AI selected a field that is not currently visible and editable. No text was entered.', fromUser: false);
             return;
           }
         } else if (command.startsWith('open ')) {
           final requested = command.substring(5).trim().toLowerCase();
-          final appExists = installedApps.cast<dynamic>().map((raw) =>
-              (Map<String, dynamic>.from(raw as Map)['label'] ?? '').toString().toLowerCase())
+          final appExists = installedApps
+              .map((rawApp) => (Map<String, dynamic>.from(rawApp as Map)['label'] ?? '').toString().toLowerCase())
               .any((name) => name == requested || name.startsWith(requested));
           if (!appExists) {
             _add('The AI selected an app that is not in the installed-app list. No app was opened.', fromUser: false);
