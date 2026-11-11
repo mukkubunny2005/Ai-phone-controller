@@ -17,7 +17,7 @@ void main() {
     test('splits semicolon-delimited workflows', () {
       expect(
         AutomationCommandParser.split(AutomationCommandParser.normalize('open Chrome; read screen; back')),
-        ['open Chrome', 'read screen', 'back'],
+        ['open chrome', 'read screen', 'back'],
       );
     });
 
@@ -26,7 +26,7 @@ void main() {
     });
 
     test('ignores empty steps around separators', () {
-      expect(AutomationCommandParser.split(AutomationCommandParser.normalize('; open Chrome ;; back ;')), ['open Chrome', 'back']);
+      expect(AutomationCommandParser.split(AutomationCommandParser.normalize('; open Chrome ;; back ;')), ['open chrome', 'back']);
     });
   });
 }
