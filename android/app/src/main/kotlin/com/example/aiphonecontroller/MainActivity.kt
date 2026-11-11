@@ -1,6 +1,8 @@
 package com.example.aiphonecontroller
 
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.provider.Settings
 import android.text.TextUtils
 import io.flutter.embedding.android.FlutterActivity
@@ -9,7 +11,6 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     private val channelName = "com.example.aiphonecontroller/accessibility"
-    private val allowedPackages = setOf("com.android.chrome", "com.google.android.youtube", "com.android.settings", "com.google.android.apps.maps", "com.google.android.calculator")
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -17,12 +18,32 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "getAccessibilityStatus" -> result.success(if (isAccessibilityServiceEnabled()) "enabled" else "disabled")
                 "openAccessibilitySettings" -> { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); result.success(true) }
+                "getLaunchableApps" -> result.success(getLaunchableApps())
+                "launchAppByName" -> {
+                    val appName = call.argument<String>("appName")?.trim()
+                    if (appName.isNullOrBlank() || appName.length > 100) {
+                        result.error("BAD_APP_NAME", "Enter a valid installed app name.", null)
+                    } else {
+                        val match = findLaunchableApp(appName)
+                        if (match == null) result.success(false)
+                        else {
+                            val launchIntent = packageManager.getLaunchIntentForPackage(match.activityInfo.packageName)
+                            if (launchIntent == null) result.success(false)
+                            else {
+                                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                startActivity(launchIntent)
+                                result.success(true)
+                            }
+                        }
+                    }
+                }
                 "launchApp" -> {
                     val packageName = call.argument<String>("packageName")
-                    if (packageName == null || packageName !in allowedPackages) result.error("NOT_ALLOWED", "This app is not in the launch allow-list.", null)
+                    if (packageName == null || packageName.length > 200) result.error("BAD_PACKAGE", "Invalid package name.", null)
                     else {
                         val intent = packageManager.getLaunchIntentForPackage(packageName)
-                        if (intent == null) result.success(false) else { intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(intent); result.success(true) }
+                        if (intent == null) result.success(false)
+                        else { intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(intent); result.success(true) }
                     }
                 }
                 "readVisibleElements" -> {
@@ -49,6 +70,34 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    private fun queryLauncherActivities(): List<android.content.pm.ResolveInfo> {
+        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.queryIntentActivities(intent, 0)
+        }
+    }
+
+    private fun getLaunchableApps(): List<Map<String, String>> =
+        queryLauncherActivities()
+            .filter { it.activityInfo.packageName != packageName }
+            .map {
+                mapOf(
+                    "label" to it.loadLabel(packageManager).toString(),
+                    "packageName" to it.activityInfo.packageName
+                )
+            }
+            .distinctBy { it["packageName"] }
+            .sortedBy { it["label"]?.lowercase() }
+
+    private fun findLaunchableApp(query: String): android.content.pm.ResolveInfo? {
+        val apps = queryLauncherActivities().filter { it.activityInfo.packageName != packageName }
+        return apps.firstOrNull { it.loadLabel(packageManager).toString().equals(query, ignoreCase = true) }
+            ?: apps.firstOrNull { it.loadLabel(packageManager).toString().startsWith(query, ignoreCase = true) }
     }
 
     private fun isAccessibilityServiceEnabled(): Boolean {
