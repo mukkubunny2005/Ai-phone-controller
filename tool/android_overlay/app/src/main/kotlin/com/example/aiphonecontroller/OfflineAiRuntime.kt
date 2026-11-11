@@ -40,7 +40,8 @@ class OfflineAiRuntime(private val modelFile: File) {
                 createdEngine = newEngine
                 runBlocking { newEngine.initialize() }
                 initialized = true
-                val createdConversation = newEngine.createConversation(
+                val createdConversation = runBlocking {
+                    newEngine.createConversation(
                     ConversationConfig(
                         systemInstruction = Contents.of(
                             "You are the offline assistant inside AI Phone Controller. " +
@@ -51,7 +52,8 @@ class OfflineAiRuntime(private val modelFile: File) {
                         ),
                         samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.2),
                     )
-                )
+                    )
+                }
                 engine = newEngine
                 conversation = createdConversation
                 ready = true
