@@ -17,7 +17,7 @@ void main() {
     test('splits semicolon-delimited workflows', () {
       expect(
         AutomationCommandParser.split('open Chrome; read screen; back'),
-        ['open chrome', 'read screen', 'back'],
+        ['open Chrome', 'read screen', 'back'],
       );
     });
 
