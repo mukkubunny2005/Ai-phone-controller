@@ -10,7 +10,7 @@ class AutomationCommandParser {
 
   /// Split workflows on "then", "and then", or semicolons.
   static List<String> split(String value) => value
-      .split(RegExp(r'\s+(?:and then|then)\s+|\s*;\s*'))
+      .split(RegExp(r'\s+(?:and then|then)\s+|\s*;\s*', caseSensitive: false))
       .map((part) => part.trim())
       .where((part) => part.isNotEmpty)
       .toList(growable: false);
