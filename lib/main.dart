@@ -77,7 +77,7 @@ class _AssistantPageState extends State<AssistantPage> {
 
     final normalized = text.toLowerCase().replaceAll(RegExp(r'[^a-z0-9 ]'), ' ').trim();
     String? appName;
-    if (normalized.startsWith('open ')) {
+    if (normalized == 'read screen' || normalized == 'show screen') {\n      await _readScreen();\n      return;\n    }\n    if (normalized == 'back' || normalized == 'go back') {\n      await _goBack();\n      return;\n    }\n    if (normalized.startsWith('open ')) {
       final requested = normalized.substring(5).trim();
       if (_apps.containsKey(requested)) appName = requested;
     }
@@ -105,7 +105,7 @@ class _AssistantPageState extends State<AssistantPage> {
 
     if (normalized == 'help' || normalized == 'what can you do') {
       _add(
-        'Try: open Chrome, open YouTube, open Settings, open Maps, or open Calculator. '
+        'Try: open Chrome, open YouTube, open Settings, open Maps, open Calculator, read screen, or back. '
         'I ask before launching. More advanced AI and UI automation are not installed yet.',
         fromUser: false,
       );
@@ -133,6 +133,79 @@ class _AssistantPageState extends State<AssistantPage> {
       _add('Android bridge is unavailable. Run this on an Android build.', fromUser: false);
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _readScreen() async {
+    try {
+      final elements = await _native.invokeListMethod<dynamic>('readVisibleElements');
+      if (!mounted) return;
+      if (elements == null || elements.isEmpty) {
+        _add('No accessible elements found. Open another app and ensure its controls are exposed to Android Accessibility.', fromUser: false);
+        return;
+      }
+      showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Visible screen elements'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: elements.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final item = Map<String, dynamic>.from(elements[index] as Map);
+                final label = (item['label'] ?? 'Element').toString();
+                final clickable = item['clickable'] == true;
+                final editable = item['editable'] == true;
+                return ListTile(
+                  dense: true,
+                  title: Text('${item['index']}. $label'),
+                  subtitle: Text(clickable ? 'Tap target' : editable ? 'Text field' : 'Visible element'),
+                  trailing: clickable ? const Icon(Icons.touch_app) : null,
+                  onTap: clickable ? () async {
+                    Navigator.pop(dialogContext);
+                    final approved = await showDialog<bool>(
+                      context: this.context,
+                      builder: (confirmContext) => AlertDialog(
+                        title: const Text('Confirm action'),
+                        content: Text('Tap "$label"?'),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(confirmContext, false), child: const Text('Cancel')),
+                          FilledButton(onPressed: () => Navigator.pop(confirmContext, true), child: const Text('Tap')),
+                        ],
+                      ),
+                    );
+                    if (approved == true) {
+                      try {
+                        final ok = await _native.invokeMethod<bool>('clickElement', {'index': item['index']});
+                        if (mounted) _add(ok == true ? 'Tapped "$label".' : 'Android could not tap "$label".', fromUser: false);
+                      } on PlatformException catch (e) {
+                        if (mounted) _add(e.message ?? 'Tap failed.', fromUser: false);
+                      }
+                    }
+                  } : null,
+                );
+              },
+            ),
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Close'))],
+        ),
+      );
+    } on PlatformException catch (e) {
+      if (mounted) _add(e.message ?? 'Could not read the screen. Enable Accessibility first.', fromUser: false);
+    } on MissingPluginException {
+      if (mounted) _add('Screen reading is available in the Android app build.', fromUser: false);
+    }
+  }
+
+  Future<void> _goBack() async {
+    try {
+      final ok = await _native.invokeMethod<bool>('goBack');
+      if (mounted) _add(ok == true ? 'Went back.' : 'Android could not go back.', fromUser: false);
+    } on PlatformException catch (e) {
+      if (mounted) _add(e.message ?? 'Back action failed.', fromUser: false);
     }
   }
 
@@ -246,7 +319,7 @@ class _AssistantPageState extends State<AssistantPage> {
                     textInputAction: TextInputAction.send,
                     onSubmitted: (_) => _send(),
                     decoration: InputDecoration(
-                      hintText: 'Try “open Chrome”…',
+                      hintText: 'Try “open Chrome” or “read screen”…',
                       filled: true,
                       fillColor: const Color(0xFF151D2B),
                       contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
