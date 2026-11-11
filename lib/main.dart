@@ -304,7 +304,7 @@ Rules:
 
   Future<bool> _runStep(String command, {bool workflow = false}) async {
     if (command == 'read screen' || command == 'show screen') {
-      await _readScreen();
+      await _readScreen(showDialog: !workflow);
       return true;
     }
     if (command == 'back' || command == 'go back') {
@@ -328,6 +328,17 @@ Rules:
   }
 
   Future<bool> _confirm(String message) async {
+    try {
+      final approved = await _native.invokeMethod<bool>('confirmAction', {'message': message});
+      return approved == true;
+    } on PlatformException catch (error) {
+      if (error.code != 'SERVICE_DISABLED') {
+        _add('Could not show confirmation: ${error.message ?? error.code}.', fromUser: false);
+        return false;
+      }
+    } on MissingPluginException {
+      // Fall back to the in-app dialog when running without the Android bridge.
+    }
     final result = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -383,12 +394,20 @@ Rules:
     }
   }
 
-  Future<void> _readScreen() async {
+  Future<void> _readScreen({bool showDialog = true}) async {
     try {
       final elements = await _native.invokeListMethod<dynamic>('readVisibleElements');
       if (!mounted) return;
       if (elements == null || elements.isEmpty) {
         _add('No accessible elements found. Enable the Accessibility service and open an app with accessible controls.', fromUser: false);
+        return;
+      }
+      if (!showDialog) {
+        final labels = elements.take(8).map((raw) {
+          final item = Map<String, dynamic>.from(raw as Map);
+          return '${item['index']}: ${item['label']}';
+        }).join(' · ');
+        _add('Read ${elements.length} accessible elements. ${labels.isEmpty ? '' : labels}', fromUser: false);
         return;
       }
       await showDialog<void>(
