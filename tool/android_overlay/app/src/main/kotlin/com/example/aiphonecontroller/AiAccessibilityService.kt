@@ -1,6 +1,15 @@
 package com.example.aiphonecontroller
 
 import android.accessibilityservice.AccessibilityService
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
+import android.view.Gravity
+import android.view.WindowManager
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.util.TypedValue
 import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -8,8 +17,93 @@ import android.view.accessibility.AccessibilityNodeInfo
 
 class AiAccessibilityService : AccessibilityService() {
     private val visiblePaths = mutableListOf<List<Int>>()
+    private var confirmationView: LinearLayout? = null
+    private var confirmationCallback: ((Boolean) -> Unit)? = null
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    fun requestConfirmation(message: String, callback: (Boolean) -> Unit) {
+        dismissConfirmation(false)
+        val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(12))
+            background = GradientDrawable().apply {
+                setColor(Color.rgb(20, 28, 45))
+                cornerRadius = dp(18).toFloat()
+                setStroke(dp(1), Color.rgb(116, 132, 240))
+            }
+            elevation = dp(10).toFloat()
+        }
+        val title = TextView(this).apply {
+            text = "AI Phone Controller · Confirm action"
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        }
+        val detail = TextView(this).apply {
+            text = message.take(500)
+            setTextColor(Color.rgb(224, 229, 242))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setPadding(0, dp(8), 0, dp(12))
+        }
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+        }
+        val cancel = Button(this).apply {
+            text = "Cancel"
+            isAllCaps = false
+            setOnClickListener { dismissConfirmation(false) }
+        }
+        val confirm = Button(this).apply {
+            text = "Confirm"
+            isAllCaps = false
+            setOnClickListener { dismissConfirmation(true) }
+        }
+        actions.addView(cancel)
+        actions.addView(confirm)
+        panel.addView(title)
+        panel.addView(detail)
+        panel.addView(actions)
+
+        val params = WindowManager.LayoutParams(
+            resources.displayMetrics.widthPixels - dp(28),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y = dp(28)
+        }
+        try {
+            confirmationCallback = callback
+            confirmationView = panel
+            windowManager.addView(panel, params)
+        } catch (error: Exception) {
+            confirmationView = null
+            confirmationCallback = null
+            callback(false)
+            Log.e(TAG, "Could not show confirmation overlay", error)
+        }
+    }
+
+    private fun dismissConfirmation(confirmed: Boolean) {
+        val panel = confirmationView
+        confirmationView = null
+        val callback = confirmationCallback
+        confirmationCallback = null
+        if (panel != null) {
+            try {
+                (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(panel)
+            } catch (_: Exception) { }
+        }
+        callback?.invoke(confirmed)
+    }
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
-    override fun onInterrupt() { Log.i(TAG, "Accessibility service interrupted") }
+    override fun onInterrupt() { dismissConfirmation(false); Log.i(TAG, "Accessibility service interrupted") }
 
     fun readVisibleElements(): List<Map<String, Any>> {
         val root = rootInActiveWindow ?: return emptyList()
@@ -78,5 +172,5 @@ class AiAccessibilityService : AccessibilityService() {
             private set
     }
     override fun onServiceConnected() { super.onServiceConnected(); instance = this }
-    override fun onDestroy() { instance = null; super.onDestroy() }
+    override fun onDestroy() { dismissConfirmation(false); instance = null; super.onDestroy() }
 }
