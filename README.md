@@ -1,41 +1,41 @@
 # AI Phone Controller
 
-An offline-first Android assistant project using Flutter for the chat interface and Kotlin for Android integration.
+Offline-first Android assistant starter: Flutter chat UI + Kotlin Android bridge.
 
-## Current starter implementation
+## Implemented in this repository
 
-- Dark Flutter chat interface with text input.
-- Flutter MethodChannel connected to a Kotlin Android activity.
-- Accessibility-service status check.
-- Optional Accessibility Service that only logs foreground app/package changes.
-- No screenshots, screen-text extraction, taps, or model inference are implemented yet.
+- Dark Flutter chat interface.
+- Text commands for launching Chrome, YouTube, Android Settings, Maps, and Calculator.
+- A confirmation dialog appears before every app launch.
+- Kotlin MethodChannel validates each requested package against a fixed allow-list.
+- Accessibility status check and shortcut to Android Accessibility settings.
+- Optional Accessibility Service logs foreground app/package changes only.
 
-## Requirements
+## Not implemented yet
 
-- Flutter SDK (stable)
-- Android Studio / Android SDK
-- Android device or emulator (Android 15 is the intended target)
+- A local language model / natural-language reasoning.
+- Voice input.
+- General-purpose UI-tree reading, tapping, scrolling, or multi-step automation.
+- Background scheduling or unattended actions.
 
-## Create the Flutter Android scaffold
+These are separate milestones and must be implemented and tested on the target Android device. The current command parser is a small offline rule-based parser, not an AI model.
 
-From the repository root, run:
+## Build setup
+
+This repository contains the Flutter source and custom Android integration files. A Flutter Android Gradle scaffold and wrapper are not yet included. Install Flutter and Android Studio, then generate a clean Android scaffold in a temporary Flutter project:
 
 ```bash
-flutter create . --platforms=android --org com.example
+flutter create --platforms=android --org com.example phone_controller_build
 ```
 
-Then make sure the Android module's `namespace` and `applicationId` in `android/app/build.gradle` (or `build.gradle.kts`) are both:
+Copy the generated `android/` build infrastructure into this repository, then merge (do not blindly overwrite) the custom files here:
+- `android/app/src/main/AndroidManifest.xml`
+- `android/app/src/main/kotlin/com/example/aiphonecontroller/MainActivity.kt`
+- `android/app/src/main/kotlin/com/example/aiphonecontroller/AiAccessibilityService.kt`
+- `android/app/src/main/res/xml/ai_accessibility_service_config.xml`
+- `android/app/src/main/res/values/strings.xml`
 
-```gradle
-com.example.aiphonecontroller
-```
-
-Place the Kotlin files from this repository under:
-`android/app/src/main/kotlin/com/example/aiphonecontroller/`
-
-Keep the AndroidManifest.xml and accessibility XML/string resources from this repository when merging with the generated Flutter scaffold. Do not remove Flutter's generated embedding metadata or required activity configuration.
-
-Install dependencies and run:
+Set Android `namespace` and `applicationId` to `com.example.aiphonecontroller`. Then run:
 
 ```bash
 flutter pub get
@@ -43,21 +43,27 @@ flutter analyze
 flutter run
 ```
 
-## Enable the optional service
+## Try these commands
 
-After installing the app, open Android Settings → Accessibility → Installed apps/services → AI Phone Controller, and enable it only if you want foreground-app detection. Android wording varies by device.
+- `open Chrome`
+- `open YouTube`
+- `open Settings`
+- `open Maps`
+- `open Calculator`
+- `help`
 
-The service is deliberately limited to foreground package-change events. It does not inspect screen content or perform actions. Any future interaction feature must be transparent, user-initiated, limited to supported accessible controls, and respect Android security restrictions.
+The target app must be installed. Android device vendors may use different package names for some apps.
 
-## Development roadmap
+## Accessibility and privacy
 
-1. Run the Flutter UI on a physical device.
-2. Verify the MethodChannel status check.
-3. Verify opt-in foreground package detection.
-4. Design a small, allow-listed interaction system with explicit confirmation.
-5. Evaluate compact local text models on the target device before selecting one.
-6. Add voice input and reliability tests.
+The service is optional and must be enabled by the device owner in Android Settings. It currently observes only window-state changes and logs the foreground package name. It does not take screenshots, read typed text, collect credentials, or click controls. App launches are initiated by the user in the chat and require an explicit confirmation.
 
-## Important
+Any future accessibility actions must remain visible, user-initiated, restricted to supported accessible controls, and must respect Android's secure-window and permission boundaries.
 
-This is a starter foundation, not a finished phone-control assistant. The repository does not yet include an on-device language model or automatic app-control actions. Mark milestones complete only after testing them on a real device.
+## Roadmap
+
+1. Generate the Android build scaffold and run on a physical phone.
+2. Verify app launch and accessibility status on the target device.
+3. Add opt-in voice input with clear microphone disclosure.
+4. Evaluate a compact on-device model and integrate only after checking Android 15 / 8 GB RAM compatibility.
+5. Add limited accessibility interactions with per-action confirmation and tests.
