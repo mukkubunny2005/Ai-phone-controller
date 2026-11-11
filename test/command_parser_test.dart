@@ -9,14 +9,14 @@ void main() {
 
     test('splits then and and then in the right order', () {
       expect(
-        AutomationCommandParser.split(AutomationCommandParser.normalize('open Chrome and then read screen then back')),
-        ['open chrome', 'read screen', 'back'],
+        AutomationCommandParser.split('open Chrome and then read screen then back'),
+        ['open Chrome', 'read screen', 'back'],
       );
     });
 
     test('splits semicolon-delimited workflows', () {
       expect(
-        AutomationCommandParser.split(AutomationCommandParser.normalize('open Chrome; read screen; back')),
+        AutomationCommandParser.split('open Chrome; read screen; back'),
         ['open chrome', 'read screen', 'back'],
       );
     });
@@ -26,7 +26,7 @@ void main() {
     });
 
     test('ignores empty steps around separators', () {
-      expect(AutomationCommandParser.split(AutomationCommandParser.normalize('; open Chrome ;; back ;')), ['open chrome', 'back']);
+      expect(AutomationCommandParser.split('; open Chrome ;; back ;'), ['open Chrome', 'back']);
     });
   });
 }
