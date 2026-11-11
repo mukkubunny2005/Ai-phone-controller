@@ -14,6 +14,7 @@ Flutter + Kotlin Android assistant for on-device, user-confirmed phone automatio
 - Model download is started only after the user confirms; it is Wi-Fi-only and about 1.6 GB.
 - Model weights are stored in app-private device storage, not bundled into the APK. After download, inference runs on-device without sending prompts or screen text to a server.
 - The AI planner reads the current accessibility tree, proposes one action at a time, validates app names and element indices, and requires confirmation before each app launch, tap, text entry, or Back action.
+- Confirmations appear in a small Accessibility overlay above the active app, so multi-step tasks can continue while another app is open. The overlay blocks background touches until Confirm or Cancel is chosen.
 - User can cancel an AI task or multi-step workflow.
 - No screenshots, root access, voice commands, hidden tapping, or automatic form submission.
 - Android minimum SDK 24; Android 15 target is supported by the generated Flutter scaffold.
