@@ -1,69 +1,71 @@
 # AI Phone Controller
 
-Offline-first Android assistant starter: Flutter chat UI + Kotlin Android bridge.
+An offline-first Android assistant starter using Flutter for the chat UI and Kotlin for Android integration.
 
-## Implemented in this repository
+## Included now
 
-- Dark Flutter chat interface.
-- Text commands for launching Chrome, YouTube, Android Settings, Maps, and Calculator.
-- A confirmation dialog appears before every app launch.
-- Kotlin MethodChannel validates each requested package against a fixed allow-list.
-- Accessibility status check and shortcut to Android Accessibility settings.
-- Optional Accessibility Service logs foreground app/package changes only.
+- Dark Flutter chat interface with text-only commands.
+- Explicit confirmation before launching an app.
+- Allow-listed app launching for Chrome, YouTube, Android Settings, Maps, and Calculator.
+- Kotlin MethodChannel bridge with a second allow-list check on Android.
+- Optional Accessibility Service that observes foreground app changes only.
+- No screenshots, voice-command feature, or screen-text collection.
+- Flutter widget smoke test.
+- GitHub Actions workflow that generates the Android Gradle scaffold, runs analysis and tests, builds a debug APK, and uploads the APK as an artifact.
 
-## Not implemented yet
+## Current command support
 
-- A local language model / natural-language reasoning.
-- Voice input.
-- General-purpose UI-tree reading, tapping, scrolling, or multi-step automation.
-- Background scheduling or unattended actions.
-
-These are separate milestones and must be implemented and tested on the target Android device. The current command parser is a small offline rule-based parser, not an AI model.
-
-## Build setup
-
-This repository contains the Flutter source and custom Android integration files. A Flutter Android Gradle scaffold and wrapper are not yet included. Install Flutter and Android Studio, then generate a clean Android scaffold in a temporary Flutter project:
-
-```bash
-flutter create --platforms=android --org com.example phone_controller_build
-```
-
-Copy the generated `android/` build infrastructure into this repository, then merge (do not blindly overwrite) the custom files here:
-- `android/app/src/main/AndroidManifest.xml`
-- `android/app/src/main/kotlin/com/example/aiphonecontroller/MainActivity.kt`
-- `android/app/src/main/kotlin/com/example/aiphonecontroller/AiAccessibilityService.kt`
-- `android/app/src/main/res/xml/ai_accessibility_service_config.xml`
-- `android/app/src/main/res/values/strings.xml`
-
-Set Android `namespace` and `applicationId` to `com.example.aiphonecontroller`. Then run:
-
-```bash
-flutter pub get
-flutter analyze
-flutter run
-```
-
-## Try these commands
-
+- `help`
 - `open Chrome`
 - `open YouTube`
 - `open Settings`
 - `open Maps`
 - `open Calculator`
-- `help`
 
-The target app must be installed. Android device vendors may use different package names for some apps.
+The parser is intentionally rule-based at this stage. A local language model and general-purpose accessible UI automation are not yet included. The accessibility service does not read UI nodes or click controls.
+
+## Generate Android build files locally
+
+Requirements: Flutter stable SDK, Android Studio / Android SDK, Java 17.
+
+From the repository root:
+
+```bash
+bash tool/prepare_android.sh
+flutter pub get
+flutter analyze
+flutter test
+flutter build apk --debug
+```
+
+The script generates a clean Flutter Android Gradle project and overlays the repository's native Kotlin/manifest integration. It can be rerun if the generated Android build files are damaged.
+
+Debug APK output:
+
+```
+build/app/outputs/flutter-apk/app-debug.apk
+```
+
+## GitHub Actions build
+
+Every push to `main` and pull request targeting `main` triggers `.github/workflows/android-debug.yml`.
+
+When the workflow succeeds, open the repository's **Actions** tab, select the latest **Android debug build** run, and download the `ai-phone-controller-debug-apk` artifact.
+
+## Android package identity
+
+- Application ID / namespace: `com.example.aiphonecontroller`
+- Main activity: `com.example.aiphonecontroller.MainActivity`
 
 ## Accessibility and privacy
 
-The service is optional and must be enabled by the device owner in Android Settings. It currently observes only window-state changes and logs the foreground package name. It does not take screenshots, read typed text, collect credentials, or click controls. App launches are initiated by the user in the chat and require an explicit confirmation.
+The optional service must be enabled manually by the device owner in Android Settings. It currently observes window-state changes only. It does not capture screenshots, read text from the screen, collect credentials, or click controls. Every app launch is initiated by the user and requires confirmation.
 
-Any future accessibility actions must remain visible, user-initiated, restricted to supported accessible controls, and must respect Android's secure-window and permission boundaries.
+## Not complete yet
 
-## Roadmap
+- On-device AI model / natural-language reasoning.
+- Accessible UI-tree inspection and controlled actions.
+- Multi-step app workflows.
+- Physical-device validation on Android 15.
 
-1. Generate the Android build scaffold and run on a physical phone.
-2. Verify app launch and accessibility status on the target device.
-3. Add opt-in voice input with clear microphone disclosure.
-4. Evaluate a compact on-device model and integrate only after checking Android 15 / 8 GB RAM compatibility.
-5. Add limited accessibility interactions with per-action confirmation and tests.
+These are not represented as completed features. The first target is a reproducible debug build and passing automated checks.
