@@ -36,9 +36,10 @@ class _AssistantPageState extends State<AssistantPage> {
   final _input = TextEditingController();
   final _scroll = ScrollController();
   final List<ChatMessage> _messages = [
-    const ChatMessage('Hello! I can open supported apps, inspect accessible screen controls, tap a selected control, enter text into a selected field, and go back. No screenshots are taken.', fromUser: false),
+    const ChatMessage('AI Phone Controller ready. Try “open Chrome”, “read screen”, or a sequence such as “open Chrome then read screen then back”. Each action is confirmed separately.', fromUser: false),
   ];
   bool _busy = false;
+  bool _cancelWorkflow = false;
 
   static const _apps = <String, String>{
     'chrome': 'com.android.chrome',
@@ -58,12 +59,14 @@ class _AssistantPageState extends State<AssistantPage> {
     });
   }
 
+  String _normalize(String value) => value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9 ]'), ' ').replaceAll(RegExp(r'\\s+'), ' ').trim();
+
   Future<void> _send([String? preset]) async {
     final text = (preset ?? _input.text).trim();
     if (text.isEmpty || _busy) return;
     _input.clear();
     _add(text, fromUser: true);
-    final normalized = text.toLowerCase().replaceAll(RegExp(r'[^a-z0-9 ]'), ' ').trim();
+    final normalized = _normalize(text);
 
     if (normalized == 'read screen' || normalized == 'show screen') {
       await _readScreen();
@@ -74,19 +77,83 @@ class _AssistantPageState extends State<AssistantPage> {
       return;
     }
     if (normalized == 'help' || normalized == 'what can you do') {
-      _add('Commands: open Chrome, open YouTube, open Settings, open Maps, open Calculator, read screen, back. In Read Screen, choose a visible control or editable field. Every tap and text entry asks for confirmation.', fromUser: false);
+      _add('Single actions: open Chrome/YouTube/Settings/Maps/Calculator, read screen, back. Multi-step: join actions with “then”, for example “open Chrome then read screen then back”. You can also use “tap 4” or “enter 4 hello” after reading the current screen. Each step is confirmed. Maximum 8 steps per workflow.', fromUser: false);
       return;
     }
-    if (normalized.startsWith('open ')) {
-      final app = normalized.substring(5).trim();
-      if (_apps.containsKey(app)) {
-        final approved = await _confirm('Open ${app[0].toUpperCase()}${app.substring(1)} on this phone?');
-        if (approved) await _launch(app);
-        else _add('Cancelled. No app was opened.', fromUser: false);
+    final steps = _splitWorkflow(normalized);
+    if (steps.length > 1) {
+      await _runWorkflow(steps);
+      return;
+    }
+    await _runStep(normalized);
+  }
+
+  List<String> _splitWorkflow(String text) {
+    final parts = text.split(RegExp(r'\\s+(?:then|and then)\\s+|\\s*;\\s*'));
+    return parts.map((part) => part.trim()).where((part) => part.isNotEmpty).toList();
+  }
+
+  Future<void> _runWorkflow(List<String> steps) async {
+    if (steps.length > 8) {
+      _add('This workflow has ${steps.length} steps. The limit is 8; split it into smaller workflows.', fromUser: false);
+      return;
+    }
+    final supported = steps.every(_isSupportedStep);
+    if (!supported) {
+      _add('One step is not supported. Use help to see supported actions. Nothing was executed.', fromUser: false);
+      return;
+    }
+    _cancelWorkflow = false;
+    _add('Starting workflow with ${steps.length} steps. You will confirm each action separately.', fromUser: false);
+    for (var i = 0; i < steps.length; i++) {
+      if (_cancelWorkflow || !mounted) {
+        _add('Workflow cancelled. Remaining steps were skipped.', fromUser: false);
+        return;
+      }
+      _add('Step ${i + 1}/${steps.length}: ${steps[i]}', fromUser: false);
+      final success = await _runStep(steps[i], workflow: true);
+      if (!success) {
+        _add('Workflow stopped at step ${i + 1}. Remaining steps were not run.', fromUser: false);
         return;
       }
     }
-    _add('I do not understand that command yet. Try “help”. Offline AI language understanding is not integrated yet.', fromUser: false);
+    _add('Workflow finished.', fromUser: false);
+  }
+
+  bool _isSupportedStep(String step) {
+    if (step == 'read screen' || step == 'show screen' || step == 'back' || step == 'go back') return true;
+    if (step.startsWith('open ') && _apps.containsKey(step.substring(5).trim())) return true;
+    if (RegExp(r'^tap [0-9]+$').hasMatch(step)) return true;
+    return RegExp(r'^enter [0-9]+ .+$').hasMatch(step);
+  }
+
+  Future<bool> _runStep(String command, {bool workflow = false}) async {
+    if (command == 'read screen' || command == 'show screen') {
+      await _readScreen();
+      return true;
+    }
+    if (command == 'back' || command == 'go back') {
+      return _goBack(confirm: true);
+    }
+    if (command.startsWith('open ')) {
+      final app = command.substring(5).trim();
+      if (!_apps.containsKey(app)) {
+        _add('Unsupported app: $app. Allowed apps: ${_apps.keys.join(', ')}.', fromUser: false);
+        return false;
+      }
+      final approved = await _confirm('Open ${app[0].toUpperCase()}${app.substring(1)}?');
+      if (!approved) {
+        _add('Step cancelled.', fromUser: false);
+        return false;
+      }
+      return _launch(app);
+    }
+    final tapMatch = RegExp(r'^tap ([0-9]+)$').firstMatch(command);
+    if (tapMatch != null) return _tapIndex(int.parse(tapMatch.group(1)!));
+    final enterMatch = RegExp(r'^enter ([0-9]+) (.+)$').firstMatch(command);
+    if (enterMatch != null) return _enterIndex(int.parse(enterMatch.group(1)!), enterMatch.group(2)!);
+    _add('Unsupported command. Type “help”.', fromUser: false);
+    return false;
   }
 
   Future<bool> _confirm(String message) async {
@@ -104,27 +171,52 @@ class _AssistantPageState extends State<AssistantPage> {
     return result == true;
   }
 
-  Future<void> _launch(String app) async {
-    setState(() => _busy = true);
+  Future<bool> _launch(String app) async {
     try {
       final opened = await _native.invokeMethod<bool>('launchApp', <String, String>{'packageName': _apps[app]!});
-      _add(opened == true ? 'Opening ${app[0].toUpperCase()}${app.substring(1)}.' : 'That app is not installed or Android could not open it.', fromUser: false);
+      _add(opened == true ? 'Opened ${app[0].toUpperCase()}${app.substring(1)}.' : 'That app is not installed or Android could not open it.', fromUser: false);
+      return opened == true;
     } on PlatformException catch (e) {
       _add('Android error: ${e.message ?? 'Unable to launch app'}.', fromUser: false);
+      return false;
     } on MissingPluginException {
       _add('Android bridge is unavailable. Run this on an Android build.', fromUser: false);
-    } finally {
-      if (mounted) setState(() => _busy = false);
+      return false;
+    }
+  }
+
+  Future<bool> _tapIndex(int index) async {
+    final approved = await _confirm('Tap visible element number $index? Make sure it is the intended control.');
+    if (!approved) return false;
+    try {
+      final ok = await _native.invokeMethod<bool>('clickElement', {'index': index});
+      _add(ok == true ? 'Tapped element $index.' : 'Tap failed. Read screen again because the app may have changed.', fromUser: false);
+      return ok == true;
+    } on PlatformException catch (e) {
+      _add(e.message ?? 'Tap failed.', fromUser: false);
+      return false;
+    }
+  }
+
+  Future<bool> _enterIndex(int index, String value) async {
+    final approved = await _confirm('Enter the text you supplied into visible field $index?');
+    if (!approved) return false;
+    try {
+      final ok = await _native.invokeMethod<bool>('enterText', {'index': index, 'text': value});
+      _add(ok == true ? 'Text entered into field $index.' : 'Text entry failed. Read screen again.', fromUser: false);
+      return ok == true;
+    } on PlatformException catch (e) {
+      _add(e.message ?? 'Text entry failed.', fromUser: false);
+      return false;
     }
   }
 
   Future<void> _readScreen() async {
-    setState(() => _busy = true);
     try {
       final elements = await _native.invokeListMethod<dynamic>('readVisibleElements');
       if (!mounted) return;
       if (elements == null || elements.isEmpty) {
-        _add('No accessible screen elements found. Enable the Accessibility service and open an app with accessible controls.', fromUser: false);
+        _add('No accessible elements found. Enable the Accessibility service and open an app with accessible controls.', fromUser: false);
         return;
       }
       await showDialog<void>(
@@ -148,24 +240,14 @@ class _AssistantPageState extends State<AssistantPage> {
                   title: Text('$elementIndex. $label', maxLines: 2, overflow: TextOverflow.ellipsis),
                   subtitle: Text(editable ? 'Editable field' : clickable ? 'Clickable control' : 'Visible text'),
                   trailing: editable ? const Icon(Icons.edit) : clickable ? const Icon(Icons.touch_app) : null,
-                  onTap: editable
-                      ? () async {
-                          Navigator.pop(dialogContext);
-                          await _editElement(elementIndex, label);
-                        }
-                      : clickable
-                          ? () async {
-                              Navigator.pop(dialogContext);
-                              final approved = await _confirm('Tap “$label”?');
-                              if (!approved) return;
-                              try {
-                                final ok = await _native.invokeMethod<bool>('clickElement', {'index': elementIndex});
-                                _add(ok == true ? 'Tapped “$label”.' : 'Android could not tap that control. Refresh the screen list and try again.', fromUser: false);
-                              } on PlatformException catch (e) {
-                                _add(e.message ?? 'Tap failed.', fromUser: false);
-                              }
-                            }
-                          : null,
+                  onTap: editable ? () async {
+                    Navigator.pop(dialogContext);
+                    final value = await _askText(label);
+                    if (value != null) await _enterIndex(elementIndex, value);
+                  } : clickable ? () async {
+                    Navigator.pop(dialogContext);
+                    await _tapIndex(elementIndex);
+                  } : null,
                 );
               },
             ),
@@ -177,26 +259,20 @@ class _AssistantPageState extends State<AssistantPage> {
       _add(e.message ?? 'Could not read the screen. Enable Accessibility first.', fromUser: false);
     } on MissingPluginException {
       _add('Screen reading is available in the Android app build.', fromUser: false);
-    } finally {
-      if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _editElement(int index, String label) async {
+  Future<String?> _askText(String label) async {
     final controller = TextEditingController();
-    final value = await showDialog<String>(
+    final result = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Enter text'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label, maxLines: 2, overflow: TextOverflow.ellipsis),
-            const SizedBox(height: 12),
-            TextField(controller: controller, autofocus: true, maxLength: 2000, decoration: const InputDecoration(hintText: 'Text for selected field')),
-          ],
-        ),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text(label, maxLines: 2, overflow: TextOverflow.ellipsis),
+          const SizedBox(height: 12),
+          TextField(controller: controller, autofocus: true, maxLength: 2000),
+        ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
           FilledButton(onPressed: () => Navigator.pop(dialogContext, controller.text), child: const Text('Continue')),
@@ -204,23 +280,18 @@ class _AssistantPageState extends State<AssistantPage> {
       ),
     );
     controller.dispose();
-    if (value == null || !mounted) return;
-    final approved = await _confirm('Enter the text you provided into “$label”?');
-    if (!approved) return;
-    try {
-      final ok = await _native.invokeMethod<bool>('enterText', {'index': index, 'text': value});
-      _add(ok == true ? 'Text entered into the selected field.' : 'Could not enter text. The screen may have changed; read screen again.', fromUser: false);
-    } on PlatformException catch (e) {
-      _add(e.message ?? 'Text entry failed.', fromUser: false);
-    }
+    return result;
   }
 
-  Future<void> _goBack() async {
+  Future<bool> _goBack({bool confirm = true}) async {
+    if (confirm && !await _confirm('Perform Android Back action?')) return false;
     try {
       final ok = await _native.invokeMethod<bool>('goBack');
       _add(ok == true ? 'Went back.' : 'Back action unavailable. Enable Accessibility service first.', fromUser: false);
+      return ok == true;
     } on PlatformException catch (e) {
       _add(e.message ?? 'Back action failed.', fromUser: false);
+      return false;
     }
   }
 
@@ -233,18 +304,14 @@ class _AssistantPageState extends State<AssistantPage> {
         builder: (dialogContext) => AlertDialog(
           title: const Text('Accessibility service'),
           content: Text(status == 'enabled'
-              ? 'Enabled. The app can inspect accessible controls in the foreground window. Password fields are excluded.'
+              ? 'Enabled. The app reads the accessible foreground UI only when requested. Password fields are excluded; no screenshots are captured.'
               : 'Not enabled. Turn on AI Phone Controller in Android Accessibility settings to read and interact with visible controls.'),
           actions: [
             TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Close')),
-            if (status != 'enabled')
-              FilledButton(
-                onPressed: () async {
-                  Navigator.pop(dialogContext);
-                  await _native.invokeMethod('openAccessibilitySettings');
-                },
-                child: const Text('Open settings'),
-              ),
+            if (status != 'enabled') FilledButton(
+              onPressed: () async { Navigator.pop(dialogContext); await _native.invokeMethod('openAccessibilitySettings'); },
+              child: const Text('Open settings'),
+            ),
           ],
         ),
       );
@@ -270,7 +337,8 @@ class _AssistantPageState extends State<AssistantPage> {
           ]),
           actions: [
             IconButton(tooltip: 'Accessibility settings', onPressed: _serviceStatus, icon: const Icon(Icons.accessibility_new)),
-            IconButton(tooltip: 'Read screen', onPressed: _busy ? null : _readScreen, icon: const Icon(Icons.document_scanner_outlined)),
+            IconButton(tooltip: 'Read screen', onPressed: _readScreen, icon: const Icon(Icons.document_scanner_outlined)),
+            IconButton(tooltip: 'Cancel workflow', onPressed: () { _cancelWorkflow = true; _add('Workflow cancellation requested.', fromUser: false); }, icon: const Icon(Icons.stop_circle_outlined)),
           ],
         ),
         body: Column(children: [
@@ -298,7 +366,6 @@ class _AssistantPageState extends State<AssistantPage> {
               },
             ),
           ),
-          if (_busy) const LinearProgressIndicator(minHeight: 2),
           SizedBox(
             height: 44,
             child: ListView(
@@ -310,6 +377,7 @@ class _AssistantPageState extends State<AssistantPage> {
                     padding: const EdgeInsets.only(right: 7),
                     child: ActionChip(label: Text(app[0].toUpperCase() + app.substring(1)), onPressed: _busy ? null : () => _send('open $app')),
                   ),
+                ActionChip(label: const Text('Read screen'), onPressed: _busy ? null : () => _send('read screen')),
               ],
             ),
           ),
@@ -326,7 +394,7 @@ class _AssistantPageState extends State<AssistantPage> {
                     textInputAction: TextInputAction.send,
                     onSubmitted: (_) => _send(),
                     decoration: InputDecoration(
-                      hintText: 'Try “open Chrome” or “read screen”…',
+                      hintText: 'Try “open Chrome then read screen”…',
                       filled: true,
                       fillColor: const Color(0xFF151D2B),
                       contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
