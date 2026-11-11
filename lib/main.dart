@@ -304,7 +304,7 @@ Rules:
   Future<bool> _runStep(String command, {bool workflow = false}) async {
     final lower = command.trim().toLowerCase();
     if (lower == 'read screen' || lower == 'show screen') {
-      await _readScreen(showDialog: !workflow);
+      await _readScreen(displayDialog: !workflow);
       return true;
     }
     if (lower == 'back' || lower == 'go back') {
@@ -394,7 +394,7 @@ Rules:
     }
   }
 
-  Future<void> _readScreen({bool showDialog = true}) async {
+  Future<void> _readScreen({bool displayDialog = true}) async {
     try {
       final elements = await _native.invokeListMethod<dynamic>('readVisibleElements');
       if (!mounted) return;
@@ -402,7 +402,7 @@ Rules:
         _add('No accessible elements found. Enable the Accessibility service and open an app with accessible controls.', fromUser: false);
         return;
       }
-      if (!showDialog) {
+      if (!displayDialog) {
         final labels = elements.take(8).map((raw) {
           final item = Map<String, dynamic>.from(raw as Map);
           return '${item['index']}: ${item['label']}';
