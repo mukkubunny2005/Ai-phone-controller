@@ -1,4 +1,4 @@
-name: ai_phone_controller
+name: aiphonecontroller
 description: Offline-first Android assistant starter built with Flutter and Kotlin.
 publish_to: "none"
 version: 0.1.0+1
