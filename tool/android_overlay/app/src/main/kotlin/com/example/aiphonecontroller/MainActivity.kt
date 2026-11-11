@@ -50,7 +50,7 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
-        val complete = file.isFile && file.length() > 100_000_000L
+        val complete = file.isFile && file.length() > 1_300_000_000L && (state == "downloaded" || state == "unknown" || id <= 0L)
         return mapOf(
             "downloaded" to complete,
             "loaded" to (offlineAiRuntime?.isReady() == true),
@@ -64,7 +64,7 @@ class MainActivity : FlutterActivity() {
 
     private fun startAiModelDownload(): Long {
         val file = modelFile()
-        if (file.isFile && file.length() > 100_000_000L) return -1L
+        if (aiModelStatus()["downloaded"] == true) return -1L
         file.delete()
         val request = DownloadManager.Request(Uri.parse(modelUrl))
             .setTitle("AI Phone Controller offline model")
@@ -105,7 +105,7 @@ class MainActivity : FlutterActivity() {
                 }
                 "cancelAiModelDownload" -> result.success(cancelAiModelDownload())
                 "loadAiModel" -> {
-                    if (!modelFile().isFile || modelFile().length() <= 100_000_000L) {
+                    if (aiModelStatus()["downloaded"] != true) {
                         result.error("MODEL_NOT_DOWNLOADED", "Download the offline model first.", null)
                     } else {
                         val runtime = offlineAiRuntime ?: OfflineAiRuntime(modelFile()).also { offlineAiRuntime = it }
