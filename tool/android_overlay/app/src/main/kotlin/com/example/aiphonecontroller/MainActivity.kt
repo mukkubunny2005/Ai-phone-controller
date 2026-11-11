@@ -89,6 +89,13 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName).setMethodCallHandler { call, result ->
             when (call.method) {
+                "confirmAction" -> {
+                    val message = call.argument<String>("message")?.take(500)
+                    val service = AiAccessibilityService.instance
+                    if (message.isNullOrBlank()) result.error("BAD_CONFIRMATION", "Confirmation message is required.", null)
+                    else if (service == null) result.error("SERVICE_DISABLED", "Enable the accessibility service to confirm actions over other apps.", null)
+                    else service.requestConfirmation(message) { approved -> result.success(approved) }
+                }
                 "getAccessibilityStatus" -> result.success(if (isAccessibilityServiceEnabled()) "enabled" else "disabled")
                 "getAiModelStatus" -> result.success(aiModelStatus())
                 "getAiModelDownloadStatus" -> result.success(aiModelStatus())
