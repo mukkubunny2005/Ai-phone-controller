@@ -66,11 +66,22 @@ class _AssistantPageState extends State<AssistantPage> {
 
   String _normalize(String value) => AutomationCommandParser.normalize(value);
 
+  bool _isRestrictedIntent(String value) {
+    return RegExp(
+      r'\\b(gambling|casino|sports betting|betting|poker|pornography|porn|adult content|weapon|firearm|gun|knife|vape|cigarette|tobacco|drugs?|marijuana|alcohol|dangerous challenge|stunt)\\b',
+      caseSensitive: false,
+    ).hasMatch(value);
+  }
+
   Future<void> _send([String? preset]) async {
     final text = (preset ?? _input.text).trim();
     if (text.isEmpty || _busy) return;
     _input.clear();
     _add(text, fromUser: true);
+    if (_isRestrictedIntent(text)) {
+      _add('I can’t help automate access to restricted or dangerous content.', fromUser: false);
+      return;
+    }
     final normalized = _normalize(text);
     setState(() => _busy = true);
     try {
@@ -198,7 +209,7 @@ Rules:
 - Never guess an index or claim an action was performed.
 - If the required control is not visible, ask for clarification or choose a safe next step.
 - Stop when the task is complete. Maximum 8 actions.
-- Do not repeat an action already completed unless the current screen clearly requires it.
+- Do not repeat an action already completed unless the current screen clearly requires it.\n- Never plan access to restricted or dangerous content, age-restricted activities, or bypass safety restrictions. Do not enter passwords, one-time codes, or payment credentials.
 ''';
 
         String raw;
@@ -247,6 +258,10 @@ Rules:
           return;
         }
         final command = rawAction.trim();
+        if (_isRestrictedIntent(command)) {
+          _add('I can’t help automate access to restricted or dangerous content.', fromUser: false);
+          return;
+        }
         Map<String, dynamic>? findVisibleElement(int index) {
           for (final rawElement in visible) {
             final element = Map<String, dynamic>.from(rawElement as Map);
