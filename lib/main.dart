@@ -82,12 +82,13 @@ class _AssistantPageState extends State<AssistantPage> {
       if (_apps.containsKey(requested)) appName = requested;
     }
 
-    if (appName != null) {
+    final selectedApp = appName;
+    if (selectedApp != null) {
       final approved = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Confirm app launch'),
-          content: Text('Open ${appName[0].toUpperCase()}${appName.substring(1)} on this phone?'),
+          content: Text('Open ${selectedApp[0].toUpperCase()}${selectedApp.substring(1)} on this phone?'),
           actions: [
             TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
             FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Open')),
@@ -98,7 +99,7 @@ class _AssistantPageState extends State<AssistantPage> {
         if (mounted) _add('Cancelled. No app was opened.', fromUser: false);
         return;
       }
-      await _launch(appName);
+      await _launch(selectedApp);
       return;
     }
 
