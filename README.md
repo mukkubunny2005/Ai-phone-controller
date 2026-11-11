@@ -8,7 +8,8 @@ An offline-first Android assistant starter using Flutter for the chat UI and Kot
 - Explicit confirmation before launching an app.
 - Allow-listed app launching for Chrome, YouTube, Android Settings, Maps, and Calculator.
 - Kotlin MethodChannel bridge with a second allow-list check on Android.
-- Optional Accessibility Service that observes foreground app changes only.
+- Optional Accessibility Service that can inspect visible accessibility nodes and request confirmed taps on clickable elements.
+- Back navigation through Android Accessibility.
 - No screenshots, voice-command feature, or screen-text collection.
 - Flutter widget smoke test.
 - GitHub Actions workflow that generates the Android Gradle scaffold, runs analysis and tests, builds a debug APK, and uploads the APK as an artifact.
@@ -21,8 +22,10 @@ An offline-first Android assistant starter using Flutter for the chat UI and Kot
 - `open Settings`
 - `open Maps`
 - `open Calculator`
+- `read screen` (after enabling the Accessibility Service)
+- `back` (after enabling the Accessibility Service)
 
-The parser is intentionally rule-based at this stage. A local language model and general-purpose accessible UI automation are not yet included. The accessibility service does not read UI nodes or click controls.
+The parser is intentionally rule-based at this stage. A local language model and general-purpose multi-step automation are not yet included. Screen inspection only sees controls exposed by the current app through Android Accessibility; some apps may expose limited information.
 
 ## Generate Android build files locally
 
@@ -59,7 +62,7 @@ When the workflow succeeds, open the repository's **Actions** tab, select the la
 
 ## Accessibility and privacy
 
-The optional service must be enabled manually by the device owner in Android Settings. It currently observes window-state changes only. It does not capture screenshots, read text from the screen, collect credentials, or click controls. Every app launch is initiated by the user and requires confirmation.
+The optional service must be enabled manually by the device owner in Android Settings. It reads the current accessibility tree only when requested in the app. It does not capture screenshots. Taps are offered only for elements marked clickable and require a separate confirmation. Accessibility information varies by app; password and protected fields may not be exposed.
 
 ## Not complete yet
 
