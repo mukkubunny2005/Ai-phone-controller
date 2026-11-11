@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:ai_phone_controller/main.dart';
+import 'package:aiphonecontroller/main.dart';
 
 void main() {
   testWidgets('shows the assistant title and text input', (tester) async {
