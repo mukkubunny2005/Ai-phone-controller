@@ -67,25 +67,29 @@ class _AssistantPageState extends State<AssistantPage> {
     _input.clear();
     _add(text, fromUser: true);
     final normalized = _normalize(text);
-
-    if (normalized == 'read screen' || normalized == 'show screen') {
-      await _readScreen();
-      return;
+    setState(() => _busy = true);
+    try {
+      if (normalized == 'read screen' || normalized == 'show screen') {
+        await _readScreen();
+        return;
+      }
+      if (normalized == 'back' || normalized == 'go back') {
+        await _goBack();
+        return;
+      }
+      if (normalized == 'help' || normalized == 'what can you do') {
+        _add('Single actions: open Chrome/YouTube/Settings/Maps/Calculator, read screen, back. Multi-step: join actions with “then”, for example “open Chrome then read screen then back”. You can also use “tap 4” or “enter 4 hello” after reading the current screen. Each step is confirmed. Maximum 8 steps per workflow.', fromUser: false);
+        return;
+      }
+      final steps = _splitWorkflow(normalized);
+      if (steps.length > 1) {
+        await _runWorkflow(steps);
+        return;
+      }
+      await _runStep(normalized);
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
-    if (normalized == 'back' || normalized == 'go back') {
-      await _goBack();
-      return;
-    }
-    if (normalized == 'help' || normalized == 'what can you do') {
-      _add('Single actions: open Chrome/YouTube/Settings/Maps/Calculator, read screen, back. Multi-step: join actions with “then”, for example “open Chrome then read screen then back”. You can also use “tap 4” or “enter 4 hello” after reading the current screen. Each step is confirmed. Maximum 8 steps per workflow.', fromUser: false);
-      return;
-    }
-    final steps = _splitWorkflow(normalized);
-    if (steps.length > 1) {
-      await _runWorkflow(steps);
-      return;
-    }
-    await _runStep(normalized);
   }
 
   List<String> _splitWorkflow(String text) {
