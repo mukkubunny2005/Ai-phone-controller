@@ -29,36 +29,6 @@ class MainActivity : FlutterActivity() {
                         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                         result.success(true)
                     }
-                    "readVisibleElements" -> {
-                        val elements = AiAccessibilityService.readVisibleElements()
-                        if (elements == null) result.error("SERVICE_OFF", "Enable the AI Phone Controller accessibility service first.", null)
-                        else result.success(elements)
-                    }
-                    "clickElement" -> {
-                        val index = call.argument<Int>("index")
-                        if (index == null || index < 0) result.error("BAD_INDEX", "A valid element index is required.", null)
-                        else {
-                            val clicked = AiAccessibilityService.click(index)
-                            if (clicked == null) result.error("SERVICE_OFF", "Enable the accessibility service first.", null)
-                            else result.success(clicked)
-                        }
-                    }
-                    "enterText" -> {
-                        val index = call.argument<Int>("index")
-                        val value = call.argument<String>("text")
-                        if (index == null || index < 0 || value == null || value.length > 2000) {
-                            result.error("BAD_INPUT", "A valid element index and text up to 2000 characters are required.", null)
-                        } else {
-                            val entered = AiAccessibilityService.setText(index, value)
-                            if (entered == null) result.error("SERVICE_OFF", "Enable the accessibility service first.", null)
-                            else result.success(entered)
-                        }
-                    }
-                    "goBack" -> {
-                        val backed = AiAccessibilityService.goBack()
-                        if (backed == null) result.error("SERVICE_OFF", "Enable the accessibility service first.", null)
-                        else result.success(backed)
-                    }
                     "launchApp" -> {
                         val packageName = call.argument<String>("packageName")
                         if (packageName == null || packageName !in allowedPackages) {
