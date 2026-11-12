@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">AI Phone Controller</string>
-    <string name="accessibility_service_description">Optional service that detects which app is in the foreground. It does not read screen content or perform actions.</string>
+    <string name="accessibility_service_description">Reads visible accessibility information only when you request Read Screen or an automation step. It can tap visible controls or enter text only after you review and confirm each action. Password fields are excluded. Screen content is processed on this device and is not sent to a server by this service.</string>
 </resources>
