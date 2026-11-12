@@ -2,7 +2,7 @@ name: Android debug build
 
 on:
   push:
-    branches: [main, security/hardening-review]
+    branches: [main, security/hardening-review, security/action-validation]
   pull_request:
     branches: [main]
   workflow_dispatch:
