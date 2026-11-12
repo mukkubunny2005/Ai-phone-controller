@@ -517,8 +517,8 @@ Rules:
         builder: (dialogContext) => AlertDialog(
           title: const Text('Accessibility service'),
           content: Text(status == 'enabled'
-              ? 'Enabled. The app reads the accessible foreground UI only when requested. Password fields are excluded; no screenshots are captured.'
-              : 'Not enabled. Turn on AI Phone Controller in Android Accessibility settings to read and interact with visible controls.'),
+              ? 'Enabled. When you request Read Screen or an automation step, the app can read text and labels exposed by the foreground app (password fields are excluded), tap visible controls, and enter text into editable fields. The automation flow asks you to review and confirm each action. It does not capture screenshots. Screen text and AI prompts are processed on this device and are not sent to a server.'
+              : 'Before enabling: AI Phone Controller uses Accessibility to read text and labels exposed by the foreground app when you request Read Screen or an automation step. Password fields are excluded and screenshots are not captured. The app can tap visible controls and enter text into editable fields; its automation flow asks you to review and confirm each action. Screen text and AI prompts are processed on this device and are not sent to a server. Enable this powerful permission only if you understand and want these features.'),
           actions: [
             TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Close')),
             if (status != 'enabled') FilledButton(
