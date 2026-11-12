@@ -101,7 +101,7 @@ class AiAccessibilityService : AccessibilityService() {
         }
         callback?.invoke(confirmed)
     }
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {\n        // Element indices are valid only for the exact UI snapshot that produced them.\n        visiblePaths.clear()\n    }
     override fun onInterrupt() { dismissConfirmation(false); Log.i(TAG, "Accessibility service interrupted") }
 
     fun readVisibleElements(): List<Map<String, Any>> {
