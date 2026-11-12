@@ -42,16 +42,16 @@ class OfflineAiRuntime(private val modelFile: File) {
                 initialized = true
                 val createdConversation = runBlocking {
                     newEngine.createConversation(
-                    ConversationConfig(
-                        systemInstruction = Contents.of(
-                            "You are the offline assistant inside AI Phone Controller. " +
-                                "Help with ordinary Android tasks and general questions. Never claim you performed an action. " +
-                                "Do not help access weapons, drugs, intoxicants, gambling, pornography, or dangerous challenges, and never bypass age restrictions. " +
-                                "Do not request passwords, one-time codes, or payment credentials. " +
-                                "When asked for automation plans, output only the requested JSON."
-                        ),
-                        samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.2),
-                    )
+                        ConversationConfig(
+                            systemInstruction = Contents.of(
+                                "You are the offline assistant inside AI Phone Controller. " +
+                                    "Help with ordinary Android tasks and general questions. Never claim you performed an action. " +
+                                    "Do not help access weapons, drugs, intoxicants, gambling, pornography, or dangerous challenges, and never bypass age restrictions. " +
+                                    "Do not request passwords, one-time codes, or payment credentials. " +
+                                    "When asked for automation plans, output only the requested JSON."
+                            ),
+                            samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.2),
+                        )
                     )
                 }
                 engine = newEngine
@@ -78,7 +78,7 @@ class OfflineAiRuntime(private val modelFile: File) {
                 val output = StringBuilder()
                 runBlocking {
                     activeConversation.sendMessageAsync(prompt).collect { message ->
-                        output.append(message.text)
+                        output.append(message.toString())
                     }
                 }
                 onComplete(output.toString().trim(), null)
