@@ -78,7 +78,7 @@ class OfflineAiRuntime(private val modelFile: File) {
                 val output = StringBuilder()
                 runBlocking {
                     activeConversation.sendMessageAsync(prompt).collect { message ->
-                        output.append(message.text)
+                        output.append(message.toString())
                     }
                 }
                 onComplete(output.toString().trim(), null)
