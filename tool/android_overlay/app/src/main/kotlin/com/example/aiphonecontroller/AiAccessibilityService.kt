@@ -115,8 +115,8 @@ class AiAccessibilityService : AccessibilityService() {
     override fun onInterrupt() { dismissConfirmation(false); Log.i(TAG, "Accessibility service interrupted") }
 
     fun readVisibleElements(): List<Map<String, Any>> {
-        val root = rootInActiveWindow ?: return emptyList()
         visibleElements.clear()
+        val root = rootInActiveWindow ?: return emptyList()
         val result = mutableListOf<Map<String, Any>>()
         try {
             collect(root, emptyList(), 0, result)
