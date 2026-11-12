@@ -168,18 +168,22 @@ class MainActivity : FlutterActivity() {
                 }
                 "clickElement" -> {
                     val index = call.argument<Int>("index")
+                    val label = call.argument<String>("label")
+                    val className = call.argument<String>("className")
                     val service = AiAccessibilityService.instance
-                    if (index == null || index < 0) result.error("BAD_INDEX", "Invalid element index.", null)
+                    if (index == null || index < 0 || label == null || className == null) result.error("BAD_INDEX", "Invalid or incomplete element reference.", null)
                     else if (service == null) result.error("SERVICE_DISABLED", "Enable accessibility service first.", null)
-                    else result.success(service.clickElement(index))
+                    else result.success(service.clickElement(index, label, className))
                 }
                 "enterText" -> {
                     val index = call.argument<Int>("index")
                     val value = call.argument<String>("text")
+                    val label = call.argument<String>("label")
+                    val className = call.argument<String>("className")
                     val service = AiAccessibilityService.instance
-                    if (index == null || index < 0 || value == null || value.length > 2000) result.error("BAD_INPUT", "Invalid field or text too long.", null)
+                    if (index == null || index < 0 || value == null || value.length > 2000 || label == null || className == null) result.error("BAD_INPUT", "Invalid field reference or text too long.", null)
                     else if (service == null) result.error("SERVICE_DISABLED", "Enable accessibility service first.", null)
-                    else result.success(service.enterText(index, value))
+                    else result.success(service.enterText(index, value, label, className))
                 }
                 "goBack" -> result.success(AiAccessibilityService.instance?.goBack() == true)
                 else -> result.notImplemented()
