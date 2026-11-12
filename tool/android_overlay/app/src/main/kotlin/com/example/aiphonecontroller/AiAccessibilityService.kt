@@ -16,7 +16,14 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
 class AiAccessibilityService : AccessibilityService() {
-    private val visiblePaths = mutableListOf<List<Int>>()
+    private data class VisibleElement(
+        val path: List<Int>,
+        val label: String,
+        val className: String,
+        val clickable: Boolean,
+        val editable: Boolean
+    )
+    private val visibleElements = mutableListOf<VisibleElement>()
     private var confirmationView: LinearLayout? = null
     private var confirmationCallback: ((Boolean) -> Unit)? = null
 
@@ -103,16 +110,19 @@ class AiAccessibilityService : AccessibilityService() {
     }
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // Element indices are valid only for the exact UI snapshot that produced them.
-        visiblePaths.clear()
+        visibleElements.clear()
     }
     override fun onInterrupt() { dismissConfirmation(false); Log.i(TAG, "Accessibility service interrupted") }
 
     fun readVisibleElements(): List<Map<String, Any>> {
         val root = rootInActiveWindow ?: return emptyList()
-        visiblePaths.clear()
+        visibleElements.clear()
         val result = mutableListOf<Map<String, Any>>()
-        collect(root, emptyList(), 0, result)
-        root.recycle()
+        try {
+            collect(root, emptyList(), 0, result)
+        } finally {
+            root.recycle()
+        }
         return result
     }
 
@@ -121,9 +131,11 @@ class AiAccessibilityService : AccessibilityService() {
         if (!node.isPassword) {
             val label = listOfNotNull(node.text?.toString()?.takeIf { it.isNotBlank() }, node.contentDescription?.toString()?.takeIf { it.isNotBlank() }).distinct().joinToString(" ").take(300)
             if (label.isNotBlank() || node.isClickable || node.isEditable) {
-                val index = visiblePaths.size
-                visiblePaths.add(path)
-                output.add(mapOf("index" to index, "label" to if (label.isBlank()) node.className?.toString().orEmpty() else label, "clickable" to node.isClickable, "editable" to node.isEditable, "className" to node.className?.toString().orEmpty()))
+                val className = node.className?.toString().orEmpty()
+                val visibleLabel = if (label.isBlank()) className else label
+                val index = visibleElements.size
+                visibleElements.add(VisibleElement(path, visibleLabel, className, node.isClickable, node.isEditable))
+                output.add(mapOf("index" to index, "label" to visibleLabel, "clickable" to node.isClickable, "editable" to node.isEditable, "className" to className))
             }
         }
         for (i in 0 until node.childCount) {
@@ -144,26 +156,39 @@ class AiAccessibilityService : AccessibilityService() {
         return node
     }
 
-    fun clickElement(index: Int): Boolean {
-        val path = visiblePaths.getOrNull(index) ?: return false
-        var target = resolve(path) ?: return false
-        while (!target.isClickable) {
-            val parent = target.parent ?: break
-            target.recycle()
-            target = parent
-        }
-        val success = target.isClickable && target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        target.recycle()
-        return success
+    private fun currentLabel(node: AccessibilityNodeInfo): String {
+        val parts = listOfNotNull(
+            node.text?.toString()?.takeIf { it.isNotBlank() },
+            node.contentDescription?.toString()?.takeIf { it.isNotBlank() }
+        ).distinct()
+        return parts.joinToString(" ").take(300).ifBlank { node.className?.toString().orEmpty() }
     }
 
-    fun enterText(index: Int, value: String): Boolean {
-        val node = resolve(visiblePaths.getOrNull(index) ?: return false) ?: return false
-        val success = !node.isPassword && node.isEditable && node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
-        })
-        node.recycle()
-        return success
+    fun clickElement(index: Int, expectedLabel: String, expectedClassName: String): Boolean {
+        val snapshot = visibleElements.getOrNull(index) ?: return false
+        if (!snapshot.clickable || snapshot.label != expectedLabel || snapshot.className != expectedClassName) return false
+        val node = resolve(snapshot.path) ?: return false
+        return try {
+            !node.isPassword && node.isVisibleToUser && node.isClickable &&
+                node.className?.toString().orEmpty() == expectedClassName &&
+                currentLabel(node) == expectedLabel &&
+                node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        } finally { node.recycle() }
+    }
+
+    fun enterText(index: Int, value: String, expectedLabel: String, expectedClassName: String): Boolean {
+        if (value.length > 2000) return false
+        val snapshot = visibleElements.getOrNull(index) ?: return false
+        if (!snapshot.editable || snapshot.label != expectedLabel || snapshot.className != expectedClassName) return false
+        val node = resolve(snapshot.path) ?: return false
+        return try {
+            !node.isPassword && node.isVisibleToUser && node.isEditable &&
+                node.className?.toString().orEmpty() == expectedClassName &&
+                currentLabel(node) == expectedLabel &&
+                node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
+                })
+        } finally { node.recycle() }
     }
 
     fun goBack(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)
