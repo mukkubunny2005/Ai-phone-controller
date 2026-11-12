@@ -9,6 +9,8 @@ import com.google.ai.edge.litertlm.SamplerConfig
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.runBlocking
 import java.io.File
+import java.io.FileInputStream
+import java.security.MessageDigest
 import java.util.concurrent.Executors
 
 /**
@@ -29,8 +31,19 @@ class OfflineAiRuntime(private val modelFile: File) {
                 onComplete(true, null)
                 return@execute
             }
-            if (!modelFile.isFile || modelFile.length() < 100_000_000L) {
+            if (!modelFile.isFile || modelFile.length() < 1_300_000_000L) {
                 onComplete(false, "Offline model file is missing or incomplete.")
+                return@execute
+            }
+            val actualSha256 = try {
+                sha256(modelFile)
+            } catch (error: Exception) {
+                onComplete(false, "Could not verify the offline model file: ${error.message}")
+                return@execute
+            }
+            if (!actualSha256.equals(EXPECTED_MODEL_SHA256, ignoreCase = true)) {
+                modelFile.delete()
+                onComplete(false, "Model integrity check failed. The downloaded file was deleted; download it again from the official source.")
                 return@execute
             }
             var createdEngine: Engine? = null
@@ -67,6 +80,19 @@ class OfflineAiRuntime(private val modelFile: File) {
         }
     }
 
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        FileInputStream(file).use { input ->
+            val buffer = ByteArray(1024 * 1024)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
     fun generate(prompt: String, onComplete: (String?, String?) -> Unit) {
         executor.execute {
             val activeConversation = conversation
@@ -86,6 +112,11 @@ class OfflineAiRuntime(private val modelFile: File) {
                 onComplete(null, error.message ?: "Offline AI generation failed.")
             }
         }
+    }
+
+    companion object {
+        // SHA-256 published on the Hugging Face file page for this exact model artifact.
+        private const val EXPECTED_MODEL_SHA256 = "c4a9b7289365ab80fe599b844b77ad253eb3c53fb0e5d963d699146a6f01255e"
     }
 
     fun close() {
