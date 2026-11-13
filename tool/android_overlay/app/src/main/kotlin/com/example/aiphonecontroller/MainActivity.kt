@@ -1,12 +1,17 @@
 package com.example.aiphonecontroller
 
+import android.Manifest
 import android.app.DownloadManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Bundle
 import android.provider.Settings
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.text.TextUtils
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -19,6 +24,9 @@ class MainActivity : FlutterActivity() {
     private val modelUrl = "https://huggingface.co/litert-community/Qwen2.5-1.5B-Instruct/resolve/main/Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm?download=true"
     private val modelPreferences by lazy { getSharedPreferences("offline_ai_model", MODE_PRIVATE) }
     private var offlineAiRuntime: OfflineAiRuntime? = null
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var pendingVoiceResult: MethodChannel.Result? = null
+    private val voicePermissionRequestCode = 7412
 
     private fun modelFile(): File {
         val directory = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: filesDir
@@ -133,6 +141,30 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "openAccessibilitySettings" -> { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); result.success(true) }
+                "startVoiceRecognition" -> startVoiceRecognition(result)
+                "cancelVoiceRecognition" -> {
+                    stopVoiceRecognition()
+                    result.success(true)
+                }
+                "openSettingsPage" -> {
+                    val setting = call.argument<String>("setting")?.lowercase()
+                    val action = when (setting) {
+                        "wifi" -> Settings.ACTION_WIFI_SETTINGS
+                        "bluetooth" -> Settings.ACTION_BLUETOOTH_SETTINGS
+                        "display" -> Settings.ACTION_DISPLAY_SETTINGS
+                        "sound" -> Settings.ACTION_SOUND_SETTINGS
+                        "location" -> Settings.ACTION_LOCATION_SOURCE_SETTINGS
+                        "battery" -> Settings.ACTION_BATTERY_SAVER_SETTINGS
+                        else -> null
+                    }
+                    if (action == null) result.error("BAD_SETTING", "Unsupported settings page.", null)
+                    else try {
+                        startActivity(Intent(action))
+                        result.success(true)
+                    } catch (_: Exception) {
+                        result.success(false)
+                    }
+                }
                 "getLaunchableApps" -> result.success(getLaunchableApps())
                 "launchAppByName" -> {
                     val appName = call.argument<String>("appName")?.trim()
@@ -186,12 +218,92 @@ class MainActivity : FlutterActivity() {
                     else result.success(service.enterText(index, value, label, className))
                 }
                 "goBack" -> result.success(AiAccessibilityService.instance?.goBack() == true)
+                "goHome" -> result.success(AiAccessibilityService.instance?.goHome() == true)
+                "scrollScreen" -> {
+                    val direction = call.argument<String>("direction")
+                    val service = AiAccessibilityService.instance
+                    if (direction !in listOf("up", "down")) result.error("BAD_DIRECTION", "Direction must be up or down.", null)
+                    else if (service == null) result.error("SERVICE_DISABLED", "Enable Accessibility first.", null)
+                    else result.success(service.scrollScreen(direction!!))
+                }
                 else -> result.notImplemented()
             }
         }
     }
 
+    private fun startVoiceRecognition(result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            !SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
+        ) {
+            result.error("ON_DEVICE_VOICE_UNAVAILABLE", "On-device speech recognition is not available on this device. Install an offline speech language pack or use text input.", null)
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            pendingVoiceResult = result
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), voicePermissionRequestCode)
+            return
+        }
+        beginOnDeviceRecognition(result)
+    }
+
+    private fun beginOnDeviceRecognition(result: MethodChannel.Result) {
+        stopVoiceRecognition()
+        try {
+            val recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+            speechRecognizer = recognizer
+            recognizer.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) = Unit
+                override fun onBeginningOfSpeech() = Unit
+                override fun onRmsChanged(rmsdB: Float) = Unit
+                override fun onBufferReceived(buffer: ByteArray?) = Unit
+                override fun onEndOfSpeech() = Unit
+                override fun onPartialResults(partialResults: Bundle?) = Unit
+                override fun onEvent(eventType: Int, params: Bundle?) = Unit
+                override fun onResults(results: Bundle?) {
+                    val spoken = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                    stopVoiceRecognition()
+                    if (spoken.isNullOrBlank()) result.error("EMPTY_VOICE_RESULT", "No speech was recognized. Try again or type your command.", null)
+                    else result.success(spoken)
+                }
+                override fun onError(error: Int) {
+                    stopVoiceRecognition()
+                    result.error("VOICE_RECOGNITION_FAILED", "On-device speech recognition failed (code $error). Try again or type your command.", null)
+                }
+            })
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            }
+            recognizer.startListening(intent)
+        } catch (error: Exception) {
+            stopVoiceRecognition()
+            result.error("VOICE_RECOGNITION_FAILED", error.message ?: "Could not start on-device speech recognition.", null)
+        }
+    }
+
+    private fun stopVoiceRecognition() {
+        val recognizer = speechRecognizer
+        speechRecognizer = null
+        try { recognizer?.cancel() } catch (_: Exception) { }
+        try { recognizer?.destroy() } catch (_: Exception) { }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == voicePermissionRequestCode) {
+            val result = pendingVoiceResult
+            pendingVoiceResult = null
+            if (result == null) return
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) beginOnDeviceRecognition(result)
+            else result.error("MIC_PERMISSION_DENIED", "Microphone permission was not granted. You can still type commands.", null)
+        }
+    }
+
     override fun onDestroy() {
+        pendingVoiceResult = null
+        stopVoiceRecognition()
         offlineAiRuntime?.close()
         offlineAiRuntime = null
         super.onDestroy()
