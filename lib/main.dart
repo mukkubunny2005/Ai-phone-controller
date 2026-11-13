@@ -212,8 +212,14 @@ Choose exactly one format:
 {"action":"enter visible editable element index exact text"}
 {"action":"back"}
 {"action":"home"}
-{"action":"scroll up or scroll down"}
-{"action":"settings wifi|bluetooth|display|sound|location|battery"}
+{"action":"scroll up"}
+{"action":"scroll down"}
+{"action":"settings wifi"}
+{"action":"settings bluetooth"}
+{"action":"settings display"}
+{"action":"settings sound"}
+{"action":"settings location"}
+{"action":"settings battery"}
 {"done":true,"message":"short completion message"}
 {"reply":"answer to a normal question that does not need phone control"}
 {"clarification":"one question or explain what is missing"}
