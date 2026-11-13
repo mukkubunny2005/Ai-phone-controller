@@ -260,7 +260,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('help'), findsOneWidget);
-    expect(find.textContaining('Single actions:'), findsOneWidget);
+    expect(find.textContaining('Commands:'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
