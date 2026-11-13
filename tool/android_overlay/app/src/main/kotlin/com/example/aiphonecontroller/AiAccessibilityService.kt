@@ -139,16 +139,25 @@ class AiAccessibilityService : AccessibilityService() {
 
     private fun collect(node: AccessibilityNodeInfo, path: List<Int>, depth: Int, output: MutableList<Map<String, Any>>) {
         if (depth > 18 || output.size >= 160 || isSensitiveNode(node)) return
-        {
-            val label = listOfNotNull(node.text?.toString()?.takeIf { it.isNotBlank() }, node.contentDescription?.toString()?.takeIf { it.isNotBlank() }).distinct().joinToString(" ").take(300)
-            if (label.isNotBlank() || node.isClickable || node.isEditable) {
-                val className = node.className?.toString().orEmpty()
-                val visibleLabel = if (label.isBlank()) className else label
-                val index = visibleElements.size
-                visibleElements.add(VisibleElement(path, visibleLabel, className, node.isClickable, node.isEditable))
-                output.add(mapOf("index" to index, "label" to visibleLabel, "clickable" to node.isClickable, "editable" to node.isEditable, "className" to className))
-            }
+
+        val label = listOfNotNull(
+            node.text?.toString()?.takeIf { it.isNotBlank() },
+            node.contentDescription?.toString()?.takeIf { it.isNotBlank() }
+        ).distinct().joinToString(" ").take(300)
+        if (label.isNotBlank() || node.isClickable || node.isEditable) {
+            val className = node.className?.toString().orEmpty()
+            val visibleLabel = if (label.isBlank()) className else label
+            val index = visibleElements.size
+            visibleElements.add(VisibleElement(path, visibleLabel, className, node.isClickable, node.isEditable))
+            output.add(mapOf(
+                "index" to index,
+                "label" to visibleLabel,
+                "clickable" to node.isClickable,
+                "editable" to node.isEditable,
+                "className" to className
+            ))
         }
+
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
             collect(child, path + i, depth + 1, output)
