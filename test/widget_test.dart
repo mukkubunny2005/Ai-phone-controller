@@ -12,7 +12,7 @@ void _mockAndroidBridge(
   String accessibilityStatus = 'enabled',
   List<Map<String, Object?>> visibleElements = const [],
   List<String>? calls,
-  Future<Object?> Function(MethodCall call)? override,
+  Object? Function(MethodCall call)? override,
 }) {
   TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
       .setMockMethodCallHandler(_channel, (call) async {
