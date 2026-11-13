@@ -132,10 +132,12 @@ class AiAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow ?: return
         val text = StringBuilder()
         try { collectProtectionText(root, text, 0) } finally { root.recycle() }
-        if (containsInappropriateSignal(text.toString()) && now - lastWarningAt >= WARNING_COOLDOWN_MS) {
+        if (containsInappropriateSignal(text.toString()) &&
+            (lastWarningAt == 0L || now - lastWarningAt >= WARNING_COOLDOWN_MS)
+        ) {
             lastWarningAt = now
-            showProtectionWarning()
-            performGlobalAction(GLOBAL_ACTION_HOME)
+            val returnedHome = performGlobalAction(GLOBAL_ACTION_HOME)
+            showProtectionWarning(returnedHome)
         }
     }
 
@@ -156,7 +158,7 @@ class AiAccessibilityService : AccessibilityService() {
     private fun containsInappropriateSignal(text: String): Boolean =
         text.isNotBlank() && INAPPROPRIATE_TEXT_PATTERN.containsMatchIn(text.lowercase())
 
-    private fun showProtectionWarning() {
+    private fun showProtectionWarning(returnedHome: Boolean) {
         if (protectionWarningView != null) return
         val manager = getSystemService(WINDOW_SERVICE) as WindowManager
         val panel = LinearLayout(this).apply {
@@ -176,7 +178,11 @@ class AiAccessibilityService : AccessibilityService() {
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         }
         val detail = TextView(this).apply {
-            text = "This content may be inappropriate. Please don't watch it. YouTube has been exited."
+            text = if (returnedHome) {
+                "This content may be inappropriate. Please don't watch it. YouTube was left."
+            } else {
+                "This content may be inappropriate. Please don't watch it. Please leave YouTube now."
+            }
             setTextColor(Color.rgb(245, 226, 230))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setPadding(0, dp(9), 0, dp(12))
