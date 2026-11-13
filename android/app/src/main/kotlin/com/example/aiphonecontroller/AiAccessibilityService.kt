@@ -285,7 +285,7 @@ class AiAccessibilityService : AccessibilityService() {
         private const val WARNING_COOLDOWN_MS = 45_000L
         private const val MAX_PROTECTION_TEXT_LENGTH = 12_000
         private val INAPPROPRIATE_TEXT_PATTERN = Regex(
-            """(?i)(18\\s*\\+|\\badult\\b|\\bexplicit\\b|\\bsexual\\b|\\bnudity\\b|\\bnude\\b|\\bsuggestive\\b|\\bmature content\\b|అశ్లీల|వయోజన|నగ్న)"""
+            """(?i)(18\s*\+|\badult\b|\bexplicit\b|\bsexual\b|\bnudity\b|\bnude\b|\bsuggestive\b|\bmature content\b|అశ్లీల|వయోజన|నగ్న)"""
         )
         @Volatile var instance: AiAccessibilityService? = null
             private set
