@@ -29,6 +29,17 @@ class AiAccessibilityService : AccessibilityService() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
+    // Do not expose or automate fields that commonly contain authentication or payment secrets.
+    private fun isSensitiveNode(node: AccessibilityNodeInfo): Boolean {
+        if (node.isPassword) return true
+        val description = listOfNotNull(
+            node.text?.toString(),
+            node.contentDescription?.toString(),
+            node.hintText?.toString()
+        ).joinToString(" ")
+        return SENSITIVE_FIELD_PATTERN.containsMatchIn(description)
+    }
+
     fun requestConfirmation(message: String, callback: (Boolean) -> Unit) {
         dismissConfirmation(false)
         val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
@@ -127,8 +138,8 @@ class AiAccessibilityService : AccessibilityService() {
     }
 
     private fun collect(node: AccessibilityNodeInfo, path: List<Int>, depth: Int, output: MutableList<Map<String, Any>>) {
-        if (depth > 18 || output.size >= 160) return
-        if (!node.isPassword) {
+        if (depth > 18 || output.size >= 160 || isSensitiveNode(node)) return
+        {
             val label = listOfNotNull(node.text?.toString()?.takeIf { it.isNotBlank() }, node.contentDescription?.toString()?.takeIf { it.isNotBlank() }).distinct().joinToString(" ").take(300)
             if (label.isNotBlank() || node.isClickable || node.isEditable) {
                 val className = node.className?.toString().orEmpty()
@@ -169,7 +180,7 @@ class AiAccessibilityService : AccessibilityService() {
         if (!snapshot.clickable || snapshot.label != expectedLabel || snapshot.className != expectedClassName) return false
         val node = resolve(snapshot.path) ?: return false
         return try {
-            !node.isPassword && node.isVisibleToUser && node.isClickable &&
+            !isSensitiveNode(node) && node.isVisibleToUser && node.isClickable &&
                 node.className?.toString().orEmpty() == expectedClassName &&
                 currentLabel(node) == expectedLabel &&
                 node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
@@ -182,7 +193,7 @@ class AiAccessibilityService : AccessibilityService() {
         if (!snapshot.editable || snapshot.label != expectedLabel || snapshot.className != expectedClassName) return false
         val node = resolve(snapshot.path) ?: return false
         return try {
-            !node.isPassword && node.isVisibleToUser && node.isEditable &&
+            !isSensitiveNode(node) && node.isVisibleToUser && node.isEditable &&
                 node.className?.toString().orEmpty() == expectedClassName &&
                 currentLabel(node) == expectedLabel &&
                 node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
@@ -195,6 +206,10 @@ class AiAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "AiPhoneController"
+        private val SENSITIVE_FIELD_PATTERN = Regex(
+            """\b(password|passcode|one[- ]time\s*(password|code|pin)?|verification\s*code|security\s*code|otp|pin\s*code|pin|cvv|cvc|card\s*number|credit\s*card|debit\s*card|account\s*number)\b""",
+            RegexOption.IGNORE_CASE
+        )
         @Volatile var instance: AiAccessibilityService? = null
             private set
     }
