@@ -1,47 +1,62 @@
 # AI Phone Controller
 
-Flutter + Kotlin Android assistant for on-device, user-confirmed phone automation.
+Flutter + Kotlin Android assistant for user-confirmed, offline-first phone automation.
 
-## Implemented
+## Current features
 
-- Dark Flutter chat interface with text-only interaction (no voice commands).
+- Futuristic dark Flutter chat interface with typed commands and an optional microphone button.
+- On-device speech recognition only when the user taps the microphone. It requires Android 12+ and an installed on-device speech recognition service/language pack; otherwise typed commands remain available.
+- Offline natural-language planning using LiteRT-LM and a local Qwen2.5 1.5B Instruct model. No model API key is required because inference runs locally.
 - Opens installed Android apps by their displayed app name.
-- Android Accessibility Service reads the active window's accessible UI tree only when requested.
-- Password fields are excluded from the accessible element list.
-- Can tap visible clickable controls, enter text into editable non-password fields, and perform Back navigation.
-- Multi-step deterministic workflows with a maximum of 8 steps.
-- Offline natural-language planning using LiteRT-LM and a local Qwen2.5 1.5B Instruct model.
-- Model download is started only after the user confirms; it is Wi-Fi-only and about 1.6 GB.
-- Model weights are stored in app-private device storage, not bundled into the APK. After download, inference runs on-device without sending prompts or screen text to a server.
-- The AI planner reads the current accessibility tree, proposes one action at a time, validates app names and element indices, and requires confirmation before each app launch, tap, text entry, or Back action.
-- Confirmations appear in a small Accessibility overlay above the active app, so multi-step tasks can continue while another app is open. The overlay blocks background touches until Confirm or Cancel is chosen.
-- User can cancel an AI task or multi-step workflow.
-- No screenshots, root access, voice commands, hidden tapping, or automatic form submission.
-- Android minimum SDK 24; Android 15 target is supported by the generated Flutter scaffold.
+- Reads the foreground app's accessible UI tree, never screenshots.
+- Excludes password fields and common identifiable PIN, OTP and payment-detail fields.
+- Can tap visible controls, enter text into eligible editable fields, scroll accessible containers, perform Back and Home actions, and open selected Android settings pages.
+- Settings navigation opens the selected system page; it does not silently toggle device settings.
+- Multi-step deterministic workflows with a maximum of 8 steps, plus AI-planned workflows with a maximum of 8 actions.
+- Every app launch, tap, text entry, scroll, Back, Home or settings navigation action requires user confirmation. The user can cancel a workflow.
+- YouTube content-protection monitor: while YouTube is foregrounded and Accessibility is enabled, it checks accessible text/labels for a limited set of potentially inappropriate-content text signals. On a match, it displays a warning and attempts to return Home.
+- Screen text and AI prompts are processed on-device; the service does not capture screenshots or send screen text to a server.
+
+## Important limits
+
+- The YouTube protection feature cannot inspect video frames or images because screenshots are not used. It can miss inappropriate material when titles/captions/labels are not exposed by YouTube, and text matching can produce false positives.
+- Android does not let an ordinary third-party app reliably force-stop another app or guarantee removal of that app from Recents. The protection feature returns Home; it does not promise to remove YouTube from Recents or stop every background playback mode.
+- Accessibility can only act on controls exposed by the foreground app. Some apps expose limited UI information or block programmatic text entry.
+- Some secure screens and sensitive fields are intentionally excluded. The app does not enter passwords, OTPs or payment credentials.
+- Voice input depends on Android's on-device speech recognition service. If the phone has no offline speech service/language pack, use text input.
+- The model is about 1.6 GB and uses additional RAM when loaded. Device performance and memory use must be tested on the target phone.
+- This is not a security certification. Real-device dynamic testing remains necessary.
 
 ## Commands
-
-Examples:
 
 ```text
 help
 open Chrome
 open WhatsApp
 read screen
+scroll down
+scroll up
 back
+home
+settings wifi
+settings bluetooth
+settings display
+settings sound
+settings location
+settings battery
 tap 4
 enter 4 hello there
 ```
 
-Multi-step workflows:
+Join up to 8 steps with `then` or semicolons, for example:
 
 ```text
 open Chrome then read screen
-open Settings then read screen then back
-open Chrome; read screen; tap 4
+open Settings then settings wifi
+open Chrome; read screen; scroll down
 ```
 
-For ordinary-language requests, download and load the offline model using the brain icon in the app bar. The planner can only act on controls exposed by the foreground app's Accessibility tree. It validates each proposed action and asks for confirmation before changing the phone.
+For natural-language tasks, download and load the offline model using the brain icon. The planner proposes one action at a time, validates it against the current accessible UI and installed-app list, and asks for confirmation before the action.
 
 ## Offline model
 
@@ -49,8 +64,9 @@ For ordinary-language requests, download and load the offline model using the br
 - Model: Qwen2.5-1.5B-Instruct, quantized LiteRT-LM build (about 1.6 GB).
 - Model license: Apache-2.0.
 - Model source: https://huggingface.co/litert-community/Qwen2.5-1.5B-Instruct
-- Download is restricted to Wi-Fi by Android DownloadManager. The model is downloaded after the user taps Download model and confirms the size.
-- Model is stored outside the APK. The first load can take several seconds and uses device RAM.
+- Download is restricted to Wi-Fi by Android DownloadManager and starts only after user confirmation.
+- Model weights are stored outside the APK in app-private storage. The downloaded file is checked against its published SHA-256 before the runtime loads it.
+- After download, inference runs on-device. No API key or cloud inference endpoint is used.
 
 ## Build locally
 
@@ -59,7 +75,7 @@ Requirements: Flutter stable SDK, Android SDK / Android Studio, Java 17.
 ```bash
 bash tool/prepare_android.sh
 flutter pub get
-flutter analyze
+flutter analyze --fatal-infos --fatal-warnings
 flutter test
 flutter build apk --debug
 ```
@@ -70,21 +86,16 @@ APK output:
 build/app/outputs/flutter-apk/app-debug.apk
 ```
 
-The preparation script generates Android Gradle files and overlays the Kotlin Accessibility service, LiteRT-LM runtime, manifest, and configuration from `tool/android_overlay`.
+The preparation script generates the Android Gradle scaffold and copies the reviewed Kotlin service, bridge, model runtime, manifest, disclosure strings and Accessibility configuration from `tool/android_overlay`. Edit the overlay sources for durable Android changes.
 
 ## First launch
 
-1. Install the APK.
-2. Open the Accessibility settings button and enable AI Phone Controller.
-3. Open the Offline AI model button.
+1. Install the debug APK.
+2. Open Accessibility settings and explicitly enable AI Phone Controller after reviewing the disclosure.
+3. Open the offline AI model panel.
 4. Confirm the Wi-Fi-only model download (about 1.6 GB).
-5. After the download completes, tap Load model.
-6. Enter a natural-language phone task. Review and confirm every proposed action.
+5. After download completes, load the model.
+6. Enter a typed command or tap the microphone for on-device speech input if supported.
+7. Review and confirm every proposed phone action.
 
-## Limitations
-
-- The AI can only inspect elements exposed through Android Accessibility. Some apps expose limited UI information or block programmatic text entry.
-- Screen indices are refreshed before each AI-planned action; manually entered numeric indices should be refreshed with Read Screen after the app changes.
-- AI planning is limited to 8 actions per task and is not guaranteed to understand every app workflow.
-- Some Android vendors may restrict background execution or Accessibility behavior.
-- Physical-device validation remains necessary; app installation, model download, model loading, and device-specific performance must be checked on the target phone.
+The app's Accessibility service must remain enabled for automation and YouTube text-signal protection. Microphone permission is requested only when the microphone button is tapped.
