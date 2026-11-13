@@ -26,6 +26,9 @@ class AiAccessibilityService : AccessibilityService() {
     private val visibleElements = mutableListOf<VisibleElement>()
     private var confirmationView: LinearLayout? = null
     private var confirmationCallback: ((Boolean) -> Unit)? = null
+    private var protectionWarningView: LinearLayout? = null
+    private var lastProtectionCheckAt = 0L
+    private var lastWarningAt = 0L
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
@@ -122,8 +125,103 @@ class AiAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // Element indices are valid only for the exact UI snapshot that produced them.
         visibleElements.clear()
+        if (event?.packageName?.toString() != YOUTUBE_PACKAGE) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastProtectionCheckAt < PROTECTION_CHECK_INTERVAL_MS) return
+        lastProtectionCheckAt = now
+        val root = rootInActiveWindow ?: return
+        val text = StringBuilder()
+        try { collectProtectionText(root, text, 0) } finally { root.recycle() }
+        if (containsInappropriateSignal(text.toString()) && now - lastWarningAt >= WARNING_COOLDOWN_MS) {
+            lastWarningAt = now
+            showProtectionWarning()
+            performGlobalAction(GLOBAL_ACTION_HOME)
+        }
     }
-    override fun onInterrupt() { dismissConfirmation(false); Log.i(TAG, "Accessibility service interrupted") }
+
+    private fun collectProtectionText(node: AccessibilityNodeInfo, output: StringBuilder, depth: Int) {
+        if (depth > 14 || output.length >= MAX_PROTECTION_TEXT_LENGTH) return
+        if (!isSensitiveNode(node)) {
+            node.text?.toString()?.takeIf { it.isNotBlank() }?.let { output.append(' ').append(it.take(220)) }
+            node.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let { output.append(' ').append(it.take(220)) }
+        }
+        for (i in 0 until node.childCount) {
+            if (output.length >= MAX_PROTECTION_TEXT_LENGTH) break
+            val child = node.getChild(i) ?: continue
+            collectProtectionText(child, output, depth + 1)
+            child.recycle()
+        }
+    }
+
+    private fun containsInappropriateSignal(text: String): Boolean =
+        text.isNotBlank() && INAPPROPRIATE_TEXT_PATTERN.containsMatchIn(text.lowercase())
+
+    private fun showProtectionWarning() {
+        if (protectionWarningView != null) return
+        val manager = getSystemService(WINDOW_SERVICE) as WindowManager
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(16), dp(18), dp(14))
+            background = GradientDrawable().apply {
+                setColor(Color.rgb(35, 24, 30))
+                cornerRadius = dp(18).toFloat()
+                setStroke(dp(2), Color.rgb(235, 112, 112))
+            }
+            elevation = dp(12).toFloat()
+        }
+        val title = TextView(this).apply {
+            text = "Content protection warning"
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        val detail = TextView(this).apply {
+            text = "This content may be inappropriate. Please don't watch it. YouTube has been exited."
+            setTextColor(Color.rgb(245, 226, 230))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setPadding(0, dp(9), 0, dp(12))
+        }
+        val dismiss = Button(this).apply {
+            text = "OK"
+            isAllCaps = false
+            setOnClickListener { dismissProtectionWarning() }
+        }
+        panel.addView(title)
+        panel.addView(detail)
+        panel.addView(dismiss)
+        val params = WindowManager.LayoutParams(
+            resources.displayMetrics.widthPixels - dp(28),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y = dp(28)
+        }
+        try {
+            protectionWarningView = panel
+            manager.addView(panel, params)
+        } catch (error: Exception) {
+            protectionWarningView = null
+            Log.e(TAG, "Could not display content protection warning", error)
+        }
+    }
+
+    private fun dismissProtectionWarning() {
+        val panel = protectionWarningView
+        protectionWarningView = null
+        if (panel != null) {
+            try { (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(panel) }
+            catch (_: Exception) { }
+        }
+    }
+
+    override fun onInterrupt() {
+        dismissConfirmation(false)
+        dismissProtectionWarning()
+        Log.i(TAG, "Accessibility service interrupted")
+    }
 
     fun readVisibleElements(): List<Map<String, Any>> {
         visibleElements.clear()
@@ -213,8 +311,39 @@ class AiAccessibilityService : AccessibilityService() {
 
     fun goBack(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)
 
+    fun goHome(): Boolean = performGlobalAction(GLOBAL_ACTION_HOME)
+
+    fun scrollScreen(direction: String): Boolean {
+        val action = when (direction.lowercase()) {
+            "down" -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+            "up" -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+            else -> return false
+        }
+        val root = rootInActiveWindow ?: return false
+        return try { scrollFirstScrollable(root, action, 0) } finally { root.recycle() }
+    }
+
+    private fun scrollFirstScrollable(node: AccessibilityNodeInfo, action: Int, depth: Int): Boolean {
+        if (depth > 18) return false
+        if (node.isVisibleToUser && node.isScrollable && node.performAction(action)) return true
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val done = scrollFirstScrollable(child, action, depth + 1)
+            child.recycle()
+            if (done) return true
+        }
+        return false
+    }
+
     companion object {
         private const val TAG = "AiPhoneController"
+        private const val YOUTUBE_PACKAGE = "com.google.android.youtube"
+        private const val PROTECTION_CHECK_INTERVAL_MS = 650L
+        private const val WARNING_COOLDOWN_MS = 45_000L
+        private const val MAX_PROTECTION_TEXT_LENGTH = 10_000
+        private val INAPPROPRIATE_TEXT_PATTERN = Regex(
+            """(?i)(18\s*\+|\badult\b|\bexplicit\b|\bsexual\b|\bnudity\b|\bnude\b|\bsuggestive\b|\bmature content\b|అశ్లీల|వయోజన|నగ్న)"""
+        )
         private val SENSITIVE_FIELD_PATTERN = Regex(
             """\b(password|passcode|one[- ]time\s*(password|code|pin)?|verification\s*code|security\s*code|otp|pin\s*code|pin|cvv|cvc|card\s*number|credit\s*card|debit\s*card|account\s*number)\b""",
             RegexOption.IGNORE_CASE
@@ -223,5 +352,10 @@ class AiAccessibilityService : AccessibilityService() {
             private set
     }
     override fun onServiceConnected() { super.onServiceConnected(); instance = this }
-    override fun onDestroy() { dismissConfirmation(false); instance = null; super.onDestroy() }
+    override fun onDestroy() {
+        dismissConfirmation(false)
+        dismissProtectionWarning()
+        instance = null
+        super.onDestroy()
+    }
 }
