@@ -4,20 +4,26 @@ import android.accessibilityservice.AccessibilityService
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
-import android.os.Bundle
-import android.os.SystemClock
-import android.util.Log
-import android.util.TypedValue
 import android.view.Gravity
 import android.view.WindowManager
-import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.util.TypedValue
+import android.os.Bundle
+import android.util.Log
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 
 class AiAccessibilityService : AccessibilityService() {
-    private val visiblePaths = mutableListOf<List<Int>>()
+    private data class VisibleElement(
+        val path: List<Int>,
+        val label: String,
+        val className: String,
+        val clickable: Boolean,
+        val editable: Boolean
+    )
+    private val visibleElements = mutableListOf<VisibleElement>()
     private var confirmationView: LinearLayout? = null
     private var confirmationCallback: ((Boolean) -> Unit)? = null
     private var protectionWarningView: LinearLayout? = null
@@ -25,6 +31,17 @@ class AiAccessibilityService : AccessibilityService() {
     private var lastWarningAt = 0L
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    // Do not expose or automate fields that commonly contain authentication or payment secrets.
+    private fun isSensitiveNode(node: AccessibilityNodeInfo): Boolean {
+        if (node.isPassword) return true
+        val description = listOfNotNull(
+            node.text?.toString(),
+            node.contentDescription?.toString(),
+            node.hintText?.toString()
+        ).joinToString(" ")
+        return SENSITIVE_FIELD_PATTERN.containsMatchIn(description)
+    }
 
     fun requestConfirmation(message: String, callback: (Boolean) -> Unit) {
         dismissConfirmation(false)
@@ -74,7 +91,8 @@ class AiAccessibilityService : AccessibilityService() {
             resources.displayMetrics.widthPixels - dp(28),
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
@@ -104,37 +122,28 @@ class AiAccessibilityService : AccessibilityService() {
         }
         callback?.invoke(confirmed)
     }
-
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // Element indices are valid only for the exact UI snapshot that produced them.
+        visibleElements.clear()
         if (event?.packageName?.toString() != YOUTUBE_PACKAGE) return
-        val now = SystemClock.elapsedRealtime()
+        val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastProtectionCheckAt < PROTECTION_CHECK_INTERVAL_MS) return
         lastProtectionCheckAt = now
-
         val root = rootInActiveWindow ?: return
-        val accessibleText = StringBuilder()
-        collectProtectionText(root, accessibleText, 0)
-        root.recycle()
-
-        if (containsInappropriateSignal(accessibleText.toString()) &&
-            now - lastWarningAt >= WARNING_COOLDOWN_MS
-        ) {
+        val text = StringBuilder()
+        try { collectProtectionText(root, text, 0) } finally { root.recycle() }
+        if (containsInappropriateSignal(text.toString()) && now - lastWarningAt >= WARNING_COOLDOWN_MS) {
             lastWarningAt = now
             showProtectionWarning()
-            // Stop playback/navigation by leaving YouTube. Android may keep its task in Recents.
             performGlobalAction(GLOBAL_ACTION_HOME)
         }
     }
 
-    private fun collectProtectionText(
-        node: AccessibilityNodeInfo,
-        output: StringBuilder,
-        depth: Int
-    ) {
-        if (depth > 16 || output.length >= MAX_PROTECTION_TEXT_LENGTH) return
-        if (!node.isPassword) {
-            node.text?.toString()?.let { if (it.isNotBlank()) output.append(' ').append(it.take(250)) }
-            node.contentDescription?.toString()?.let { if (it.isNotBlank()) output.append(' ').append(it.take(250)) }
+    private fun collectProtectionText(node: AccessibilityNodeInfo, output: StringBuilder, depth: Int) {
+        if (depth > 14 || output.length >= MAX_PROTECTION_TEXT_LENGTH) return
+        if (!isSensitiveNode(node)) {
+            node.text?.toString()?.takeIf { it.isNotBlank() }?.let { output.append(' ').append(it.take(220)) }
+            node.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let { output.append(' ').append(it.take(220)) }
         }
         for (i in 0 until node.childCount) {
             if (output.length >= MAX_PROTECTION_TEXT_LENGTH) break
@@ -144,14 +153,12 @@ class AiAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun containsInappropriateSignal(text: String): Boolean {
-        if (text.isBlank()) return false
-        return INAPPROPRIATE_TEXT_PATTERN.containsMatchIn(text.lowercase())
-    }
+    private fun containsInappropriateSignal(text: String): Boolean =
+        text.isNotBlank() && INAPPROPRIATE_TEXT_PATTERN.containsMatchIn(text.lowercase())
 
     private fun showProtectionWarning() {
         if (protectionWarningView != null) return
-        val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        val manager = getSystemService(WINDOW_SERVICE) as WindowManager
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(16), dp(18), dp(14))
@@ -194,10 +201,10 @@ class AiAccessibilityService : AccessibilityService() {
         }
         try {
             protectionWarningView = panel
-            windowManager.addView(panel, params)
+            manager.addView(panel, params)
         } catch (error: Exception) {
             protectionWarningView = null
-            Log.e(TAG, "Could not show content protection warning", error)
+            Log.e(TAG, "Could not display content protection warning", error)
         }
     }
 
@@ -205,9 +212,8 @@ class AiAccessibilityService : AccessibilityService() {
         val panel = protectionWarningView
         protectionWarningView = null
         if (panel != null) {
-            try {
-                (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(panel)
-            } catch (_: Exception) { }
+            try { (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(panel) }
+            catch (_: Exception) { }
         }
     }
 
@@ -218,24 +224,38 @@ class AiAccessibilityService : AccessibilityService() {
     }
 
     fun readVisibleElements(): List<Map<String, Any>> {
+        visibleElements.clear()
         val root = rootInActiveWindow ?: return emptyList()
-        visiblePaths.clear()
         val result = mutableListOf<Map<String, Any>>()
-        collect(root, emptyList(), 0, result)
-        root.recycle()
+        try {
+            collect(root, emptyList(), 0, result)
+        } finally {
+            root.recycle()
+        }
         return result
     }
 
     private fun collect(node: AccessibilityNodeInfo, path: List<Int>, depth: Int, output: MutableList<Map<String, Any>>) {
-        if (depth > 18 || output.size >= 160) return
-        if (!node.isPassword) {
-            val label = listOfNotNull(node.text?.toString()?.takeIf { it.isNotBlank() }, node.contentDescription?.toString()?.takeIf { it.isNotBlank() }).distinct().joinToString(" ").take(300)
-            if (label.isNotBlank() || node.isClickable || node.isEditable) {
-                val index = visiblePaths.size
-                visiblePaths.add(path)
-                output.add(mapOf("index" to index, "label" to if (label.isBlank()) node.className?.toString().orEmpty() else label, "clickable" to node.isClickable, "editable" to node.isEditable, "className" to node.className?.toString().orEmpty()))
-            }
+        if (depth > 18 || output.size >= 160 || isSensitiveNode(node)) return
+
+        val label = listOfNotNull(
+            node.text?.toString()?.takeIf { it.isNotBlank() },
+            node.contentDescription?.toString()?.takeIf { it.isNotBlank() }
+        ).distinct().joinToString(" ").take(300)
+        if (label.isNotBlank() || node.isClickable || node.isEditable) {
+            val className = node.className?.toString().orEmpty()
+            val visibleLabel = if (label.isBlank()) className else label
+            val index = visibleElements.size
+            visibleElements.add(VisibleElement(path, visibleLabel, className, node.isClickable, node.isEditable))
+            output.add(mapOf(
+                "index" to index,
+                "label" to visibleLabel,
+                "clickable" to node.isClickable,
+                "editable" to node.isEditable,
+                "className" to className
+            ))
         }
+
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
             collect(child, path + i, depth + 1, output)
@@ -254,49 +274,84 @@ class AiAccessibilityService : AccessibilityService() {
         return node
     }
 
-    fun clickElement(index: Int): Boolean {
-        val path = visiblePaths.getOrNull(index) ?: return false
-        var target = resolve(path) ?: return false
-        while (!target.isClickable) {
-            val parent = target.parent ?: break
-            target.recycle()
-            target = parent
-        }
-        val success = target.isClickable && target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        target.recycle()
-        return success
+    private fun currentLabel(node: AccessibilityNodeInfo): String {
+        val parts = listOfNotNull(
+            node.text?.toString()?.takeIf { it.isNotBlank() },
+            node.contentDescription?.toString()?.takeIf { it.isNotBlank() }
+        ).distinct()
+        return parts.joinToString(" ").take(300).ifBlank { node.className?.toString().orEmpty() }
     }
 
-    fun enterText(index: Int, value: String): Boolean {
-        val node = resolve(visiblePaths.getOrNull(index) ?: return false) ?: return false
-        val success = !node.isPassword && node.isEditable && node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
-        })
-        node.recycle()
-        return success
+    fun clickElement(index: Int, expectedLabel: String, expectedClassName: String): Boolean {
+        val snapshot = visibleElements.getOrNull(index) ?: return false
+        if (!snapshot.clickable || snapshot.label != expectedLabel || snapshot.className != expectedClassName) return false
+        val node = resolve(snapshot.path) ?: return false
+        return try {
+            !isSensitiveNode(node) && node.isVisibleToUser && node.isClickable &&
+                node.className?.toString().orEmpty() == expectedClassName &&
+                currentLabel(node) == expectedLabel &&
+                node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        } finally { node.recycle() }
+    }
+
+    fun enterText(index: Int, value: String, expectedLabel: String, expectedClassName: String): Boolean {
+        if (value.length > 2000) return false
+        val snapshot = visibleElements.getOrNull(index) ?: return false
+        if (!snapshot.editable || snapshot.label != expectedLabel || snapshot.className != expectedClassName) return false
+        val node = resolve(snapshot.path) ?: return false
+        return try {
+            !isSensitiveNode(node) && node.isVisibleToUser && node.isEditable &&
+                node.className?.toString().orEmpty() == expectedClassName &&
+                currentLabel(node) == expectedLabel &&
+                node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
+                })
+        } finally { node.recycle() }
     }
 
     fun goBack(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)
 
+    fun goHome(): Boolean = performGlobalAction(GLOBAL_ACTION_HOME)
+
+    fun scrollScreen(direction: String): Boolean {
+        val action = when (direction.lowercase()) {
+            "down" -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+            "up" -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+            else -> return false
+        }
+        val root = rootInActiveWindow ?: return false
+        return try { scrollFirstScrollable(root, action, 0) } finally { root.recycle() }
+    }
+
+    private fun scrollFirstScrollable(node: AccessibilityNodeInfo, action: Int, depth: Int): Boolean {
+        if (depth > 18) return false
+        if (node.isVisibleToUser && node.isScrollable && node.performAction(action)) return true
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val done = scrollFirstScrollable(child, action, depth + 1)
+            child.recycle()
+            if (done) return true
+        }
+        return false
+    }
+
     companion object {
         private const val TAG = "AiPhoneController"
         private const val YOUTUBE_PACKAGE = "com.google.android.youtube"
-        private const val PROTECTION_CHECK_INTERVAL_MS = 700L
+        private const val PROTECTION_CHECK_INTERVAL_MS = 650L
         private const val WARNING_COOLDOWN_MS = 45_000L
-        private const val MAX_PROTECTION_TEXT_LENGTH = 12_000
+        private const val MAX_PROTECTION_TEXT_LENGTH = 10_000
         private val INAPPROPRIATE_TEXT_PATTERN = Regex(
             """(?i)(18\s*\+|\badult\b|\bexplicit\b|\bsexual\b|\bnudity\b|\bnude\b|\bsuggestive\b|\bmature content\b|అశ్లీల|వయోజన|నగ్న)"""
+        )
+        private val SENSITIVE_FIELD_PATTERN = Regex(
+            """\b(password|passcode|one[- ]time\s*(password|code|pin)?|verification\s*code|security\s*code|otp|pin\s*code|pin|cvv|cvc|card\s*number|credit\s*card|debit\s*card|account\s*number)\b""",
+            RegexOption.IGNORE_CASE
         )
         @Volatile var instance: AiAccessibilityService? = null
             private set
     }
-
-    override fun onServiceConnected() {
-        super.onServiceConnected()
-        instance = this
-        Log.i(TAG, "Accessibility service connected; YouTube content protection is active")
-    }
-
+    override fun onServiceConnected() { super.onServiceConnected(); instance = this }
     override fun onDestroy() {
         dismissConfirmation(false)
         dismissProtectionWarning()
