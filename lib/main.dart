@@ -510,24 +510,26 @@ Rules:
   }
 
   Future<String?> _askText(String label) async {
-    final controller = TextEditingController();
-    final result = await showDialog<String>(
+    var value = '';
+    return showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Enter text'),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
           Text(label, maxLines: 2, overflow: TextOverflow.ellipsis),
           const SizedBox(height: 12),
-          TextField(controller: controller, autofocus: true, maxLength: 2000),
+          TextField(
+            autofocus: true,
+            maxLength: 2000,
+            onChanged: (text) => value = text,
+          ),
         ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, controller.text), child: const Text('Continue')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, value), child: const Text('Continue')),
         ],
       ),
     );
-    controller.dispose();
-    return result;
   }
 
   Future<bool> _goBack({bool confirm = true}) async {
