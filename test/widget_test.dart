@@ -25,6 +25,9 @@ void _mockAndroidBridge(
       case 'clickElement':
       case 'enterText':
       case 'goBack':
+      case 'goHome':
+      case 'scrollScreen':
+      case 'openSettingsPage':
         return true;
       case 'getAccessibilityStatus':
         return accessibilityStatus;
@@ -181,6 +184,70 @@ void main() {
 
     expect(find.textContaining('Workflow cancellation requested.'), findsOneWidget);
     expect(calls.where((call) => call == 'launchAppByName').length, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('voice button uses the native on-device recognizer and submits recognized text', (tester) async {
+    final calls = <String>[];
+    _mockAndroidBridge(
+      tester,
+      calls: calls,
+      override: (call) {
+        if (call.method == 'startVoiceRecognition') return 'help';
+        if (call.method == 'confirmAction') return true;
+        return null;
+      },
+    );
+    await tester.pumpWidget(const AiPhoneControllerApp());
+
+    await tester.tap(find.byKey(const ValueKey('mic-button')));
+    await tester.pumpAndSettle();
+
+    expect(calls, contains('startVoiceRecognition'));
+    expect(find.text('help'), findsOneWidget);
+    expect(find.textContaining('Commands:'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Home command confirms before leaving the current app', (tester) async {
+    final calls = <String>[];
+    _mockAndroidBridge(tester, calls: calls);
+    await tester.pumpWidget(const AiPhoneControllerApp());
+
+    await tester.enterText(find.byKey(const ValueKey('chat-input')), 'home');
+    await tester.tap(find.byKey(const ValueKey('send-button')));
+    await tester.pumpAndSettle();
+
+    expect(calls, contains('confirmAction'));
+    expect(calls, contains('goHome'));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('scroll command confirms and requests the chosen direction', (tester) async {
+    final calls = <String>[];
+    _mockAndroidBridge(tester, calls: calls);
+    await tester.pumpWidget(const AiPhoneControllerApp());
+
+    await tester.enterText(find.byKey(const ValueKey('chat-input')), 'scroll down');
+    await tester.tap(find.byKey(const ValueKey('send-button')));
+    await tester.pumpAndSettle();
+
+    expect(calls, contains('confirmAction'));
+    expect(calls, contains('scrollScreen'));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('settings command opens only the selected settings page', (tester) async {
+    final calls = <String>[];
+    _mockAndroidBridge(tester, calls: calls);
+    await tester.pumpWidget(const AiPhoneControllerApp());
+
+    await tester.enterText(find.byKey(const ValueKey('chat-input')), 'settings wifi');
+    await tester.tap(find.byKey(const ValueKey('send-button')));
+    await tester.pumpAndSettle();
+
+    expect(calls, contains('confirmAction'));
+    expect(calls, contains('openSettingsPage'));
     expect(tester.takeException(), isNull);
   });
 
