@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">AI Phone Controller</string>
-    <string name="accessibility_service_description">Reads visible accessibility information only when you request Read Screen or an automation step. It can tap visible controls or enter text only after you review and confirm each action. Password fields are excluded. Screen content is processed on this device and is not sent to a server by this service.</string>
+    <string name="accessibility_service_description">Reads visible accessibility information only when you request Read Screen or an automation step. Password, PIN, OTP, and common payment-detail fields are excluded when their labels are identifiable. It can tap visible controls or enter text only after you review and confirm each action. It does not capture screenshots. Screen content is processed on this device and is not sent to a server by this service.</string>
 </resources>
