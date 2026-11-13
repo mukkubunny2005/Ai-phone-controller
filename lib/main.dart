@@ -43,6 +43,7 @@ class _AssistantPageState extends State<AssistantPage> {
     const ChatMessage('AI Phone Controller ready. Try “open Chrome”, “read screen”, or natural-language tasks after loading the offline AI model with the brain icon. Every action is confirmed.', fromUser: false),
   ];
   bool _busy = false;
+  bool _listening = false;
   bool _workflowRunning = false;
   bool _cancelWorkflow = false;
   final Map<int, Map<String, dynamic>> _visibleElements = <int, Map<String, dynamic>>{};
@@ -104,7 +105,7 @@ class _AssistantPageState extends State<AssistantPage> {
         return;
       }
       if (normalized == 'help' || normalized == 'what can you do') {
-        _add('Single actions: open an installed app by its displayed name, read screen, back. Multi-step: join actions with “then”, for example “open Chrome then read screen then back”. You can also use “tap 4” or “enter 4 hello” after reading the current screen. For natural-language tasks, load the offline AI model with the brain icon. Each action is confirmed. Maximum 8 steps.', fromUser: false);
+        _add('Commands: open an installed app, read screen, scroll up/down, back, home, settings wifi/bluetooth/display/sound/location/battery, tap a visible control, or enter text in a safe editable field. Join up to 8 steps with “then”. Use the microphone for on-device voice commands when your phone supports offline speech recognition. Load the offline AI model with the brain icon for natural-language tasks. Actions require confirmation.', fromUser: false);
         return;
       }
       final steps = _splitWorkflow(text);
@@ -210,6 +211,9 @@ Choose exactly one format:
 {"action":"tap visible element index"}
 {"action":"enter visible editable element index exact text"}
 {"action":"back"}
+{"action":"home"}
+{"action":"scroll up or scroll down"}
+{"action":"settings wifi|bluetooth|display|sound|location|battery"}
 {"done":true,"message":"short completion message"}
 {"reply":"answer to a normal question that does not need phone control"}
 {"clarification":"one question or explain what is missing"}
@@ -222,6 +226,8 @@ Rules:
 - Use only app names from the installed app list.
 - For tap, use a current index whose clickable value is true.
 - For enter, use a current index whose editable value is true.
+- Use scroll up/down only when a scrollable screen is present.
+- Home exits the current app; settings commands only open the named Android settings page and never toggle a setting automatically.
 - Never guess an index or claim an action was performed.
 - If the required control is not visible, ask for clarification or choose a safe next step.
 - Stop when the task is complete. Maximum 8 actions.
@@ -332,7 +338,574 @@ Rules:
 
   bool _isSupportedStep(String step) {
     final lower = step.trim().toLowerCase();
-    if (lower == 'read screen' || lower == 'show screen' || lower == 'back' || lower == 'go back') return true;
+    if (lower == 'read screen' || lower == 'show screen' || lower == 'back' || lower == 'go back' || lower == 'home' || lower == 'go home') return true;
+    if (lower == 'scroll up' || lower == 'scroll down') return true;
+    if (RegExp(r'^settings (wifi|bluetooth|display|sound|location|battery)    if (RegExp(r'^tap [0-9]+$').hasMatch(lower)) return true;
+    return RegExp(r'^enter [0-9]+ [\s\S]+$').hasMatch(lower);
+  }
+
+  Future<bool> _runStep(String command, {bool workflow = false}) async {
+    final lower = command.trim().toLowerCase();
+    if (lower == 'read screen' || lower == 'show screen') {
+      await _readScreen(displayDialog: !workflow);
+      return true;
+    }
+    if (lower == 'back' || lower == 'go back') {
+      return _goBack(confirm: true);
+    }
+    if (lower == 'home' || lower == 'go home') return _goHome(confirm: true);
+    if (lower == 'scroll up' || lower == 'scroll down') return _scrollScreen(lower.substring(7), confirm: true);
+    if (lower.startsWith('settings ')) return _openSettingsPage(lower.substring(9).trim(), confirm: true);
+    if (lower.startsWith('open ')) {
+      final app = command.trim().substring(5).trim();
+      final approved = await _confirm('Open the installed app "$app"?');
+      if (!approved) {
+        _add('Step cancelled.', fromUser: false);
+        return false;
+      }
+      return _launchByName(app);
+    }
+    final tapMatch = RegExp(r'^tap ([0-9]+)$').firstMatch(lower);
+    if (tapMatch != null) return _tapIndex(int.parse(tapMatch.group(1)!));
+    final enterMatch = RegExp(r'^enter ([0-9]+) ([\s\S]+)$').firstMatch(command);
+    if (enterMatch != null) return _enterIndex(int.parse(enterMatch.group(1)!), enterMatch.group(2)!);
+    _add('Unsupported command. Type “help”.', fromUser: false);
+    return false;
+  }
+
+  Future<bool> _confirm(String message) async {
+    try {
+      final approved = await _native.invokeMethod<bool>('confirmAction', {'message': message});
+      return approved == true;
+    } on PlatformException catch (error) {
+      if (error.code != 'SERVICE_DISABLED') {
+        _add('Could not show confirmation: ${error.message ?? error.code}.', fromUser: false);
+        return false;
+      }
+    } on MissingPluginException {
+      // Fall back to the in-app dialog when running without the Android bridge.
+    }
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Confirm action'),
+        content: Text(message),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Confirm')),
+        ],
+      ),
+    );
+    return result == true;
+  }
+
+  Future<bool> _launchByName(String appName) async {
+    try {
+      final opened = await _native.invokeMethod<bool>('launchAppByName', <String, String>{'appName': appName});
+      _add(opened == true ? 'Opened $appName.' : 'Could not find an installed app named "$appName". Check the app name and try again.', fromUser: false);
+      return opened == true;
+    } on PlatformException catch (e) {
+      _add('Android error: ${e.message ?? 'Unable to launch app'}.', fromUser: false);
+      return false;
+    } on MissingPluginException {
+      _add('App launching is available in the Android app build.', fromUser: false);
+      return false;
+    }
+  }
+
+
+  Future<bool> _tapIndex(int index) async {
+    final item = _visibleElements[index];
+    if (item == null || item['clickable'] != true) {
+      _add('That screen element is no longer available. Read the screen again.', fromUser: false);
+      return false;
+    }
+    final label = (item['label'] ?? '').toString();
+    final className = (item['className'] ?? '').toString();
+    final approved = await _confirm('Tap "$label" (${className.isEmpty ? 'control' : className})?');
+    if (!approved) return false;
+    try {
+      final ok = await _native.invokeMethod<bool>('clickElement', {
+        'index': index, 'label': label, 'className': className
+      });
+      _add(ok == true ? 'Tapped "$label".' : 'Tap stopped: the screen changed or the control no longer matches. Read the screen again.', fromUser: false);
+      return ok == true;
+    } on PlatformException catch (e) {
+      _add(e.message ?? 'Tap failed.', fromUser: false);
+      return false;
+    }
+  }
+
+  Future<bool> _enterIndex(int index, String value) async {
+    final item = _visibleElements[index];
+    if (item == null || item['editable'] != true) {
+      _add('That text field is no longer available. Read the screen again.', fromUser: false);
+      return false;
+    }
+    final label = (item['label'] ?? '').toString();
+    final className = (item['className'] ?? '').toString();
+    final approved = await _confirm('Enter "$value" into "$label" (${className.isEmpty ? 'text field' : className})?');
+    if (!approved) return false;
+    try {
+      final ok = await _native.invokeMethod<bool>('enterText', {
+        'index': index, 'text': value, 'label': label, 'className': className
+      });
+      _add(ok == true ? 'Text entered into "$label".' : 'Text entry stopped: the screen changed or the field no longer matches.', fromUser: false);
+      return ok == true;
+    } on PlatformException catch (e) {
+      _add(e.message ?? 'Text entry failed.', fromUser: false);
+      return false;
+    }
+  }
+
+  Future<void> _readScreen({bool displayDialog = true}) async {
+    try {
+      final elements = await _native.invokeListMethod<dynamic>('readVisibleElements');
+      if (elements != null) _cacheVisibleElements(elements);
+      if (!mounted) return;
+      if (elements == null || elements.isEmpty) {
+        _add('No accessible elements found. Enable the Accessibility service and open an app with accessible controls.', fromUser: false);
+        return;
+      }
+      if (!displayDialog) {
+        final labels = elements.take(8).map((raw) {
+          final item = Map<String, dynamic>.from(raw as Map);
+          return '${item['index']}: ${item['label']}';
+        }).join(' · ');
+        _add('Read ${elements.length} accessible elements. ${labels.isEmpty ? '' : labels}', fromUser: false);
+        return;
+      }
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text('Visible elements (${elements.length})'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: elements.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (itemContext, index) {
+                final item = Map<String, dynamic>.from(elements[index] as Map);
+                final label = (item['label'] ?? 'Element').toString();
+                final elementIndex = item['index'] as int;
+                final clickable = item['clickable'] == true;
+                final editable = item['editable'] == true;
+                return ListTile(
+                  dense: true,
+                  title: Text('$elementIndex. $label', maxLines: 2, overflow: TextOverflow.ellipsis),
+                  subtitle: Text(editable ? 'Editable field' : clickable ? 'Clickable control' : 'Visible text'),
+                  trailing: editable ? const Icon(Icons.edit) : clickable ? const Icon(Icons.touch_app) : null,
+                  onTap: editable ? () async {
+                    Navigator.pop(dialogContext);
+                    final value = await _askText(label);
+                    if (value != null) await _enterIndex(elementIndex, value);
+                  } : clickable ? () async {
+                    Navigator.pop(dialogContext);
+                    await _tapIndex(elementIndex);
+                  } : null,
+                );
+              },
+            ),
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Close'))],
+        ),
+      );
+    } on PlatformException catch (e) {
+      _add(e.message ?? 'Could not read the screen. Enable Accessibility first.', fromUser: false);
+    } on MissingPluginException {
+      _add('Screen reading is available in the Android app build.', fromUser: false);
+    }
+  }
+
+  Future<String?> _askText(String label) async {
+    var value = '';
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Enter text'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text(label, maxLines: 2, overflow: TextOverflow.ellipsis),
+          const SizedBox(height: 12),
+          TextField(
+            autofocus: true,
+            maxLength: 2000,
+            onChanged: (text) => value = text,
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, value), child: const Text('Continue')),
+        ],
+      ),
+    );
+  }
+
+  Future<bool> _goBack({bool confirm = true}) async {
+    if (confirm && !await _confirm('Perform Android Back action?')) return false;
+    try {
+      final ok = await _native.invokeMethod<bool>('goBack');
+      _add(ok == true ? 'Went back.' : 'Back action unavailable. Enable Accessibility service first.', fromUser: false);
+      return ok == true;
+    } on PlatformException catch (e) {
+      _add(e.message ?? 'Back action failed.', fromUser: false);
+      return false;
+    }
+  }
+
+  Future<bool> _goHome({bool confirm = true}) async {
+    if (confirm && !await _confirm('Exit the current app and go to the Home screen?')) return false;
+    try {
+      final ok = await _native.invokeMethod<bool>('goHome');
+      _add(ok == true ? 'Returned to the Home screen.' : 'Home action unavailable. Enable Accessibility first.', fromUser: false);
+      return ok == true;
+    } on PlatformException catch (e) {
+      _add(e.message ?? 'Home action failed.', fromUser: false);
+      return false;
+    }
+  }
+
+  Future<bool> _scrollScreen(String direction, {bool confirm = true}) async {
+    if (direction != 'up' && direction != 'down') return false;
+    if (confirm && !await _confirm('Scroll the current screen $direction?')) return false;
+    try {
+      final ok = await _native.invokeMethod<bool>('scrollScreen', {'direction': direction});
+      _add(ok == true ? 'Scrolled $direction.' : 'No accessible scrollable area was found.', fromUser: false);
+      return ok == true;
+    } on PlatformException catch (e) {
+      _add(e.message ?? 'Scroll action failed.', fromUser: false);
+      return false;
+    }
+  }
+
+  Future<bool> _openSettingsPage(String setting, {bool confirm = true}) async {
+    const allowed = {'wifi', 'bluetooth', 'display', 'sound', 'location', 'battery'};
+    if (!allowed.contains(setting)) return false;
+    if (confirm && !await _confirm('Open Android $setting settings? No setting will be changed automatically.')) return false;
+    try {
+      final ok = await _native.invokeMethod<bool>('openSettingsPage', {'setting': setting});
+      _add(ok == true ? 'Opened $setting settings. Change options manually.' : 'Could not open $setting settings on this device.', fromUser: false);
+      return ok == true;
+    } on PlatformException catch (e) {
+      _add(e.message ?? 'Could not open settings.', fromUser: false);
+      return false;
+    }
+  }
+
+  Future<void> _startVoiceInput() async {
+    if (_busy || _listening) return;
+    setState(() => _listening = true);
+    try {
+      final spoken = await _native.invokeMethod<String>('startVoiceRecognition');
+      if (!mounted || spoken == null || spoken.trim().isEmpty) return;
+      _input.text = spoken.trim();
+      await _send(spoken.trim());
+    } on PlatformException catch (e) {
+      if (mounted) _add(e.message ?? 'On-device voice input is unavailable. You can type your command.', fromUser: false);
+    } on MissingPluginException {
+      if (mounted) _add('Voice input is available in the Android build only.', fromUser: false);
+    } finally {
+      if (mounted) setState(() => _listening = false);
+    }
+  }
+
+  Future<void> _serviceStatus() async {
+    try {
+      final status = await _native.invokeMethod<String>('getAccessibilityStatus');
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Accessibility service'),
+          content: Text(status == 'enabled'
+              ? 'Enabled. Accessibility reads accessible text and labels for requested automation. While YouTube is foregrounded, it also checks exposed text for limited inappropriate-content signals; on a match it warns and exits to Home. It cannot inspect video imagery, may miss content or produce false positives, and cannot guarantee removal from Recents. Screenshots are never captured. Password, PIN, OTP and identifiable payment fields are excluded. Taps, text entry, scrolling, Back, Home and settings navigation require your confirmation. Voice recognition starts only when you tap the microphone and uses the phone’s on-device speech service when available; audio is not saved by this app.'
+              : 'Before enabling: AI Phone Controller uses Accessibility to read accessible text and labels for requested automation. While YouTube is foregrounded, it also checks exposed text for limited inappropriate-content signals; on a match it warns and exits to Home. It cannot inspect video imagery, may miss content or produce false positives, and cannot guarantee removal from Recents. Screenshots are never captured. Password, PIN, OTP and identifiable payment fields are excluded. Taps, text entry, scrolling, Back, Home and settings navigation require your confirmation. Voice recognition starts only when you tap the microphone and uses the phone’s on-device speech service when available; audio is not saved by this app. Enable this permission only if you understand and want these features.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Close')),
+            if (status != 'enabled') FilledButton(
+              onPressed: () async { Navigator.pop(dialogContext); await _native.invokeMethod('openAccessibilitySettings'); },
+              child: const Text('Open settings'),
+            ),
+          ],
+        ),
+      );
+    } on PlatformException catch (e) {
+      _add(e.message ?? 'Could not check accessibility status.', fromUser: false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _input.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final width = MediaQuery.of(context).size.width;
+    return Scaffold(
+      backgroundColor: const Color(0xFF090D16),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF0D1422),
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        toolbarHeight: 68,
+        titleSpacing: 16,
+        title: Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(13),
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF8798FF), Color(0xFF5968D8)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+              ),
+              child: const Icon(Icons.auto_awesome_rounded, color: Colors.white, size: 21),
+            ),
+            const SizedBox(width: 11),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('AI Controller', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                  SizedBox(height: 2),
+                  Text('YOUR ON-DEVICE ASSISTANT', style: TextStyle(fontSize: 9, letterSpacing: 1.15, color: Color(0xFF9AA8C2))),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Accessibility settings',
+            onPressed: _serviceStatus,
+            icon: const Icon(Icons.accessibility_new_rounded),
+          ),
+          IconButton(
+            tooltip: 'Read screen',
+            onPressed: _busy ? null : _readScreen,
+            icon: const Icon(Icons.document_scanner_outlined),
+          ),
+          if (_workflowRunning)
+            IconButton(
+              tooltip: 'Cancel workflow',
+              onPressed: () {
+                _cancelWorkflow = true;
+                _add('Workflow cancellation requested.', fromUser: false);
+              },
+              icon: const Icon(Icons.stop_circle_outlined, color: Color(0xFFFF8585)),
+            ),
+          const SizedBox(width: 4),
+        ],
+      ),
+      body: Column(
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+            color: const Color(0xFF101A2A),
+            child: const Row(
+              children: [
+                Icon(Icons.shield_outlined, size: 14, color: Color(0xFF8FA0FF)),
+                SizedBox(width: 7),
+                Expanded(
+                  child: Text(
+                    'ON-DEVICE PROCESSING  •  CONFIRM BEFORE ACTIONS',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 9, letterSpacing: .8, color: Color(0xFFB6C2D8), fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Icon(Icons.circle, size: 7, color: Color(0xFF6ED6A0)),
+                SizedBox(width: 5),
+                Text('READY', style: TextStyle(fontSize: 9, color: Color(0xFF8FE0B3), fontWeight: FontWeight.w700)),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView.builder(
+              key: const ValueKey('chat-list'),
+              controller: _scroll,
+              padding: EdgeInsets.fromLTRB(width < 380 ? 12 : 18, 18, width < 380 ? 12 : 18, 18),
+              itemCount: _messages.length,
+              itemBuilder: (context, index) {
+                final message = _messages[index];
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 15),
+                  child: Row(
+                    mainAxisAlignment: message.fromUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (!message.fromUser) ...[
+                        Container(
+                          width: 29,
+                          height: 29,
+                          margin: const EdgeInsets.only(right: 8, top: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF202C48),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.auto_awesome, size: 16, color: Color(0xFFA8B3FF)),
+                        ),
+                      ],
+                      Flexible(
+                        child: Container(
+                          constraints: BoxConstraints(maxWidth: width * .82),
+                          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 13),
+                          decoration: BoxDecoration(
+                            color: message.fromUser ? const Color(0xFF344477) : const Color(0xFF151F30),
+                            borderRadius: BorderRadius.only(
+                              topLeft: const Radius.circular(18),
+                              topRight: const Radius.circular(18),
+                              bottomLeft: Radius.circular(message.fromUser ? 18 : 5),
+                              bottomRight: Radius.circular(message.fromUser ? 5 : 18),
+                            ),
+                            border: Border.all(
+                              color: message.fromUser ? const Color(0xFF7184D0).withValues(alpha: .35) : Colors.white.withValues(alpha: .07),
+                            ),
+                          ),
+                          child: Text(
+                            message.text,
+                            style: const TextStyle(fontSize: 14, height: 1.48, color: Color(0xFFE8EDF8)),
+                          ),
+                        ),
+                      ),
+                      if (message.fromUser) const SizedBox(width: 4),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          Container(
+            decoration: const BoxDecoration(
+              color: Color(0xFF0D1422),
+              border: Border(top: BorderSide(color: Color(0xFF202B3D))),
+            ),
+            child: SafeArea(
+              top: false,
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(width < 380 ? 10 : 14, 10, width < 380 ? 10 : 14, 12),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      height: 38,
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
+                        children: [
+                          for (final app in _apps.keys)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 7),
+                              child: ActionChip(
+                                key: ValueKey('quick-$app'),
+                                avatar: const Icon(Icons.open_in_new_rounded, size: 14),
+                                label: Text(app[0].toUpperCase() + app.substring(1)),
+                                onPressed: _busy ? null : () => _send('open $app'),
+                                backgroundColor: const Color(0xFF18243A),
+                                side: const BorderSide(color: Color(0xFF2A3955)),
+                                labelStyle: const TextStyle(fontSize: 12, color: Color(0xFFD8E1F5)),
+                                visualDensity: VisualDensity.compact,
+                              ),
+                            ),
+                          ActionChip(
+                            key: const ValueKey('quick-read-screen'),
+                            avatar: const Icon(Icons.subject_rounded, size: 14),
+                            label: const Text('Read screen'),
+                            onPressed: _busy ? null : () => _send('read screen'),
+                            backgroundColor: const Color(0xFF18243A),
+                            side: const BorderSide(color: Color(0xFF2A3955)),
+                            labelStyle: const TextStyle(fontSize: 12, color: Color(0xFFD8E1F5)),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 9),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF172235),
+                              borderRadius: BorderRadius.circular(24),
+                              border: Border.all(color: const Color(0xFF2A3955)),
+                            ),
+                            child: TextField(
+                              key: const ValueKey('chat-input'),
+                              controller: _input,
+                              minLines: 1,
+                              maxLines: 4,
+                              textInputAction: TextInputAction.send,
+                              onSubmitted: (_) => _send(),
+                              style: const TextStyle(fontSize: 14, color: Color(0xFFF0F3FA)),
+                              decoration: const InputDecoration(
+                                hintText: 'Message your phone assistant…',
+                                hintStyle: TextStyle(color: Color(0xFF8290A8), fontSize: 13),
+                                filled: false,
+                                contentPadding: EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                                border: InputBorder.none,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        SizedBox(
+                          width: 43,
+                          height: 49,
+                          child: IconButton(
+                            key: const ValueKey('mic-button'),
+                            tooltip: 'On-device voice command',
+                            onPressed: _busy || _listening ? null : _startVoiceInput,
+                            icon: _listening
+                                ? const SizedBox(width: 17, height: 17, child: CircularProgressIndicator(strokeWidth: 2))
+                                : const Icon(Icons.mic_none_rounded, size: 22),
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        SizedBox(
+                          width: 49,
+                          height: 49,
+                          child: IconButton.filled(
+                            key: const ValueKey('send-button'),
+                            tooltip: 'Send message',
+                            onPressed: _busy ? null : () => _send(),
+                            icon: _busy
+                                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                                : const Icon(Icons.arrow_upward_rounded, size: 21),
+                            style: IconButton.styleFrom(
+                              backgroundColor: const Color(0xFF7888F5),
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(17)),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 7),
+                    const Text(
+                      'Review every action before it runs. Never enter passwords or payment details.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 9, color: Color(0xFF78869D)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+).hasMatch(lower)) return true;
     if (lower.startsWith('open ') && lower.substring(5).trim().isNotEmpty) return true;
     if (RegExp(r'^tap [0-9]+$').hasMatch(lower)) return true;
     return RegExp(r'^enter [0-9]+ [\s\S]+$').hasMatch(lower);
