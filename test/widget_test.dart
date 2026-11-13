@@ -56,6 +56,7 @@ void main() {
     expect(find.text('YOUR ON-DEVICE ASSISTANT'), findsOneWidget);
     expect(find.byKey(const ValueKey('chat-input')), findsOneWidget);
     expect(find.byKey(const ValueKey('send-button')), findsOneWidget);
+    expect(find.byKey(const ValueKey('mic-button')), findsOneWidget);
     expect(find.textContaining('AI Phone Controller ready'), findsOneWidget);
     for (final app in ['chrome', 'youtube', 'settings', 'maps', 'calculator']) {
       expect(find.byKey(ValueKey('quick-$app')), findsOneWidget);
