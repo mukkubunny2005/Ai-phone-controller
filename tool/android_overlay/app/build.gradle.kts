@@ -27,7 +27,7 @@ android {
     defaultConfig {
         applicationId = "com.example.aiphonecontroller"
         minSdk = 24
-        targetSdk = flutter.targetSdkVersion
+        targetSdk = 35
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
