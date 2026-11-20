@@ -59,7 +59,7 @@ class MainActivity : FlutterActivity() {
                 digest.update(buffer, 0, count)
             }
         }
-        val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
+        val actualHash = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
         if (actualHash != expectedModelSha256) {
             file.delete()
             modelPreferences.edit()
