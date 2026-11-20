@@ -17,11 +17,17 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.security.MessageDigest
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
     private val channelName = "com.example.aiphonecontroller/accessibility"
     private val modelFileName = "Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm"
-    private val modelUrl = "https://huggingface.co/litert-community/Qwen2.5-1.5B-Instruct/resolve/main/Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm?download=true"
+    // Pin the model revision so the expected SHA-256 always identifies these exact bytes.
+    private val modelUrl = "https://huggingface.co/litert-community/Qwen2.5-1.5B-Instruct/resolve/5e6e7a58d03777898b31330a15d2e0a5a9107de3/Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm?download=true"
+    private val expectedModelSha256 = "c4a9b7289365ab80fe599b844b77ad253eb3c53fb0e5d963d699146a6f01255e"
+    private val expectedModelSizeBytes = 1_597_922_856L
+    private val modelVerificationExecutor = Executors.newSingleThreadExecutor()
     private val modelPreferences by lazy { getSharedPreferences("offline_ai_model", MODE_PRIVATE) }
     private var offlineAiRuntime: OfflineAiRuntime? = null
     private var speechRecognizer: SpeechRecognizer? = null
@@ -31,6 +37,45 @@ class MainActivity : FlutterActivity() {
     private fun modelFile(): File {
         val directory = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: filesDir
         return File(directory, modelFileName)
+    }
+
+    private fun isModelIntegrityCached(file: File): Boolean =
+        file.isFile && file.length() == expectedModelSizeBytes &&
+            modelPreferences.getString("verified_sha256", null) == expectedModelSha256 &&
+            modelPreferences.getLong("verified_size", -1L) == file.length() &&
+            modelPreferences.getLong("verified_modified", -1L) == file.lastModified()
+
+    /** Hashes the complete model once and caches verification against its size and modification time. */
+    private fun verifyModelIntegrity(file: File): Boolean {
+        if (!file.isFile || file.length() != expectedModelSizeBytes) return false
+        if (isModelIntegrityCached(file)) return true
+
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered().use { input ->
+            val buffer = ByteArray(1024 * 1024)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
+        if (actualHash != expectedModelSha256) {
+            file.delete()
+            modelPreferences.edit()
+                .remove("verified_sha256")
+                .remove("verified_size")
+                .remove("verified_modified")
+                .remove("download_id")
+                .apply()
+            return false
+        }
+        modelPreferences.edit()
+            .putString("verified_sha256", actualHash)
+            .putLong("verified_size", file.length())
+            .putLong("verified_modified", file.lastModified())
+            .apply()
+        return true
     }
 
     private fun downloadManager() = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
@@ -58,10 +103,12 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
-        val complete = file.isFile && file.length() > 1_300_000_000L && (state == "downloaded" || state == "unknown" || id <= 0L)
+        val complete = file.isFile && file.length() == expectedModelSizeBytes &&
+            (state == "downloaded" || state == "unknown" || id <= 0L)
         return mapOf(
             "downloaded" to complete,
             "loaded" to (offlineAiRuntime?.isReady() == true),
+            "integrityVerified" to isModelIntegrityCached(file),
             "downloadState" to if (complete) "downloaded" else state,
             "bytesDownloaded" to downloaded,
             "totalBytes" to total,
@@ -72,7 +119,12 @@ class MainActivity : FlutterActivity() {
 
     private fun startAiModelDownload(): Long {
         val file = modelFile()
-        if (aiModelStatus()["downloaded"] == true) return -1L
+        if (isModelIntegrityCached(file)) return -1L
+        modelPreferences.edit()
+            .remove("verified_sha256")
+            .remove("verified_size")
+            .remove("verified_modified")
+            .apply()
         file.delete()
         val request = DownloadManager.Request(Uri.parse(modelUrl))
             .setTitle("AI Phone Controller offline model")
@@ -88,7 +140,12 @@ class MainActivity : FlutterActivity() {
     private fun cancelAiModelDownload(): Boolean {
         val id = modelPreferences.getLong("download_id", -1L)
         if (id > 0L) downloadManager().remove(id)
-        modelPreferences.edit().remove("download_id").apply()
+        modelPreferences.edit()
+            .remove("download_id")
+            .remove("verified_sha256")
+            .remove("verified_size")
+            .remove("verified_modified")
+            .apply()
         modelFile().delete()
         return true
     }
@@ -113,14 +170,24 @@ class MainActivity : FlutterActivity() {
                 }
                 "cancelAiModelDownload" -> result.success(cancelAiModelDownload())
                 "loadAiModel" -> {
-                    if (aiModelStatus()["downloaded"] != true) {
-                        result.error("MODEL_NOT_DOWNLOADED", "Download the offline model first.", null)
+                    val file = modelFile()
+                    if (!file.isFile || file.length() != expectedModelSizeBytes) {
+                        result.error("MODEL_NOT_DOWNLOADED", "Download the complete offline model first.", null)
                     } else {
-                        val runtime = offlineAiRuntime ?: OfflineAiRuntime(modelFile()).also { offlineAiRuntime = it }
-                        runtime.load { success, error ->
+                        modelVerificationExecutor.execute {
+                            val integrityValid = try { verifyModelIntegrity(file) } catch (_: Exception) { false }
                             runOnUiThread {
-                                if (success) result.success(true)
-                                else result.error("MODEL_LOAD_FAILED", error, null)
+                                if (!integrityValid) {
+                                    result.error("MODEL_INTEGRITY_FAILED", "The model file failed SHA-256 verification and was rejected. Download it again.", null)
+                                } else {
+                                    val runtime = offlineAiRuntime ?: OfflineAiRuntime(file).also { offlineAiRuntime = it }
+                                    runtime.load { success, error ->
+                                        runOnUiThread {
+                                            if (success) result.success(true)
+                                            else result.error("MODEL_LOAD_FAILED", error, null)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -306,6 +373,7 @@ class MainActivity : FlutterActivity() {
         stopVoiceRecognition()
         offlineAiRuntime?.close()
         offlineAiRuntime = null
+        modelVerificationExecutor.shutdown()
         super.onDestroy()
     }
 
