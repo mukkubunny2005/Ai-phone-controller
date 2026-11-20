@@ -1,28 +1,81 @@
 package com.example.aiphonecontroller
 
+import android.Manifest
 import android.app.DownloadManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Bundle
 import android.provider.Settings
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.text.TextUtils
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.security.MessageDigest
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
     private val channelName = "com.example.aiphonecontroller/accessibility"
     private val modelFileName = "Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm"
-    private val modelUrl = "https://huggingface.co/litert-community/Qwen2.5-1.5B-Instruct/resolve/main/Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm?download=true"
+    // Pin the model revision so the expected SHA-256 always identifies these exact bytes.
+    private val modelUrl = "https://huggingface.co/litert-community/Qwen2.5-1.5B-Instruct/resolve/5e6e7a58d03777898b31330a15d2e0a5a9107de3/Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm?download=true"
+    private val expectedModelSha256 = "c4a9b7289365ab80fe599b844b77ad253eb3c53fb0e5d963d699146a6f01255e"
+    private val expectedModelSizeBytes = 1_597_922_856L
+    private val modelVerificationExecutor = Executors.newSingleThreadExecutor()
     private val modelPreferences by lazy { getSharedPreferences("offline_ai_model", MODE_PRIVATE) }
     private var offlineAiRuntime: OfflineAiRuntime? = null
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var pendingVoiceResult: MethodChannel.Result? = null
+    private val voicePermissionRequestCode = 7412
 
     private fun modelFile(): File {
         val directory = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: filesDir
         return File(directory, modelFileName)
+    }
+
+    private fun isModelIntegrityCached(file: File): Boolean =
+        file.isFile && file.length() == expectedModelSizeBytes &&
+            modelPreferences.getString("verified_sha256", null) == expectedModelSha256 &&
+            modelPreferences.getLong("verified_size", -1L) == file.length() &&
+            modelPreferences.getLong("verified_modified", -1L) == file.lastModified()
+
+    /** Hashes the complete model once and caches verification against its size and modification time. */
+    private fun verifyModelIntegrity(file: File): Boolean {
+        if (!file.isFile || file.length() != expectedModelSizeBytes) return false
+        if (isModelIntegrityCached(file)) return true
+
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered().use { input ->
+            val buffer = ByteArray(1024 * 1024)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        val actualHash = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        if (actualHash != expectedModelSha256) {
+            file.delete()
+            modelPreferences.edit()
+                .remove("verified_sha256")
+                .remove("verified_size")
+                .remove("verified_modified")
+                .remove("download_id")
+                .apply()
+            return false
+        }
+        modelPreferences.edit()
+            .putString("verified_sha256", actualHash)
+            .putLong("verified_size", file.length())
+            .putLong("verified_modified", file.lastModified())
+            .apply()
+        return true
     }
 
     private fun downloadManager() = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
@@ -50,10 +103,12 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
-        val complete = file.isFile && file.length() > 1_300_000_000L && (state == "downloaded" || state == "unknown" || id <= 0L)
+        val complete = file.isFile && file.length() == expectedModelSizeBytes &&
+            (state == "downloaded" || state == "unknown" || id <= 0L)
         return mapOf(
             "downloaded" to complete,
             "loaded" to (offlineAiRuntime?.isReady() == true),
+            "integrityVerified" to isModelIntegrityCached(file),
             "downloadState" to if (complete) "downloaded" else state,
             "bytesDownloaded" to downloaded,
             "totalBytes" to total,
@@ -64,7 +119,12 @@ class MainActivity : FlutterActivity() {
 
     private fun startAiModelDownload(): Long {
         val file = modelFile()
-        if (aiModelStatus()["downloaded"] == true) return -1L
+        if (isModelIntegrityCached(file)) return -1L
+        modelPreferences.edit()
+            .remove("verified_sha256")
+            .remove("verified_size")
+            .remove("verified_modified")
+            .apply()
         file.delete()
         val request = DownloadManager.Request(Uri.parse(modelUrl))
             .setTitle("AI Phone Controller offline model")
@@ -80,7 +140,12 @@ class MainActivity : FlutterActivity() {
     private fun cancelAiModelDownload(): Boolean {
         val id = modelPreferences.getLong("download_id", -1L)
         if (id > 0L) downloadManager().remove(id)
-        modelPreferences.edit().remove("download_id").apply()
+        modelPreferences.edit()
+            .remove("download_id")
+            .remove("verified_sha256")
+            .remove("verified_size")
+            .remove("verified_modified")
+            .apply()
         modelFile().delete()
         return true
     }
@@ -105,14 +170,24 @@ class MainActivity : FlutterActivity() {
                 }
                 "cancelAiModelDownload" -> result.success(cancelAiModelDownload())
                 "loadAiModel" -> {
-                    if (aiModelStatus()["downloaded"] != true) {
-                        result.error("MODEL_NOT_DOWNLOADED", "Download the offline model first.", null)
+                    val file = modelFile()
+                    if (!file.isFile || file.length() != expectedModelSizeBytes) {
+                        result.error("MODEL_NOT_DOWNLOADED", "Download the complete offline model first.", null)
                     } else {
-                        val runtime = offlineAiRuntime ?: OfflineAiRuntime(modelFile()).also { offlineAiRuntime = it }
-                        runtime.load { success, error ->
+                        modelVerificationExecutor.execute {
+                            val integrityValid = try { verifyModelIntegrity(file) } catch (_: Exception) { false }
                             runOnUiThread {
-                                if (success) result.success(true)
-                                else result.error("MODEL_LOAD_FAILED", error, null)
+                                if (!integrityValid) {
+                                    result.error("MODEL_INTEGRITY_FAILED", "The model file failed SHA-256 verification and was rejected. Download it again.", null)
+                                } else {
+                                    val runtime = offlineAiRuntime ?: OfflineAiRuntime(file).also { offlineAiRuntime = it }
+                                    runtime.load { success, error ->
+                                        runOnUiThread {
+                                            if (success) result.success(true)
+                                            else result.error("MODEL_LOAD_FAILED", error, null)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -133,6 +208,30 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "openAccessibilitySettings" -> { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); result.success(true) }
+                "startVoiceRecognition" -> startVoiceRecognition(result)
+                "cancelVoiceRecognition" -> {
+                    stopVoiceRecognition()
+                    result.success(true)
+                }
+                "openSettingsPage" -> {
+                    val setting = call.argument<String>("setting")?.lowercase()
+                    val action = when (setting) {
+                        "wifi" -> Settings.ACTION_WIFI_SETTINGS
+                        "bluetooth" -> Settings.ACTION_BLUETOOTH_SETTINGS
+                        "display" -> Settings.ACTION_DISPLAY_SETTINGS
+                        "sound" -> Settings.ACTION_SOUND_SETTINGS
+                        "location" -> Settings.ACTION_LOCATION_SOURCE_SETTINGS
+                        "battery" -> Settings.ACTION_BATTERY_SAVER_SETTINGS
+                        else -> null
+                    }
+                    if (action == null) result.error("BAD_SETTING", "Unsupported settings page.", null)
+                    else try {
+                        startActivity(Intent(action))
+                        result.success(true)
+                    } catch (_: Exception) {
+                        result.success(false)
+                    }
+                }
                 "getLaunchableApps" -> result.success(getLaunchableApps())
                 "launchAppByName" -> {
                     val appName = call.argument<String>("appName")?.trim()
@@ -168,28 +267,113 @@ class MainActivity : FlutterActivity() {
                 }
                 "clickElement" -> {
                     val index = call.argument<Int>("index")
+                    val label = call.argument<String>("label")
+                    val className = call.argument<String>("className")
                     val service = AiAccessibilityService.instance
-                    if (index == null || index < 0) result.error("BAD_INDEX", "Invalid element index.", null)
+                    if (index == null || index < 0 || label == null || className == null) result.error("BAD_INDEX", "Invalid or incomplete element reference.", null)
                     else if (service == null) result.error("SERVICE_DISABLED", "Enable accessibility service first.", null)
-                    else result.success(service.clickElement(index))
+                    else result.success(service.clickElement(index, label, className))
                 }
                 "enterText" -> {
                     val index = call.argument<Int>("index")
                     val value = call.argument<String>("text")
+                    val label = call.argument<String>("label")
+                    val className = call.argument<String>("className")
                     val service = AiAccessibilityService.instance
-                    if (index == null || index < 0 || value == null || value.length > 2000) result.error("BAD_INPUT", "Invalid field or text too long.", null)
+                    if (index == null || index < 0 || value == null || value.length > 2000 || label == null || className == null) result.error("BAD_INPUT", "Invalid field reference or text too long.", null)
                     else if (service == null) result.error("SERVICE_DISABLED", "Enable accessibility service first.", null)
-                    else result.success(service.enterText(index, value))
+                    else result.success(service.enterText(index, value, label, className))
                 }
                 "goBack" -> result.success(AiAccessibilityService.instance?.goBack() == true)
+                "goHome" -> result.success(AiAccessibilityService.instance?.goHome() == true)
+                "scrollScreen" -> {
+                    val direction = call.argument<String>("direction")
+                    val service = AiAccessibilityService.instance
+                    if (direction !in listOf("up", "down")) result.error("BAD_DIRECTION", "Direction must be up or down.", null)
+                    else if (service == null) result.error("SERVICE_DISABLED", "Enable Accessibility first.", null)
+                    else result.success(service.scrollScreen(direction!!))
+                }
                 else -> result.notImplemented()
             }
         }
     }
 
+    private fun startVoiceRecognition(result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            !SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
+        ) {
+            result.error("ON_DEVICE_VOICE_UNAVAILABLE", "On-device speech recognition is not available on this device. Install an offline speech language pack or use text input.", null)
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            pendingVoiceResult = result
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), voicePermissionRequestCode)
+            return
+        }
+        beginOnDeviceRecognition(result)
+    }
+
+    private fun beginOnDeviceRecognition(result: MethodChannel.Result) {
+        stopVoiceRecognition()
+        try {
+            val recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+            speechRecognizer = recognizer
+            recognizer.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) = Unit
+                override fun onBeginningOfSpeech() = Unit
+                override fun onRmsChanged(rmsdB: Float) = Unit
+                override fun onBufferReceived(buffer: ByteArray?) = Unit
+                override fun onEndOfSpeech() = Unit
+                override fun onPartialResults(partialResults: Bundle?) = Unit
+                override fun onEvent(eventType: Int, params: Bundle?) = Unit
+                override fun onResults(results: Bundle?) {
+                    val spoken = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                    stopVoiceRecognition()
+                    if (spoken.isNullOrBlank()) result.error("EMPTY_VOICE_RESULT", "No speech was recognized. Try again or type your command.", null)
+                    else result.success(spoken)
+                }
+                override fun onError(error: Int) {
+                    stopVoiceRecognition()
+                    result.error("VOICE_RECOGNITION_FAILED", "On-device speech recognition failed (code $error). Try again or type your command.", null)
+                }
+            })
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            }
+            recognizer.startListening(intent)
+        } catch (error: Exception) {
+            stopVoiceRecognition()
+            result.error("VOICE_RECOGNITION_FAILED", error.message ?: "Could not start on-device speech recognition.", null)
+        }
+    }
+
+    private fun stopVoiceRecognition() {
+        val recognizer = speechRecognizer
+        speechRecognizer = null
+        try { recognizer?.cancel() } catch (_: Exception) { }
+        try { recognizer?.destroy() } catch (_: Exception) { }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == voicePermissionRequestCode) {
+            val result = pendingVoiceResult
+            pendingVoiceResult = null
+            if (result == null) return
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) beginOnDeviceRecognition(result)
+            else result.error("MIC_PERMISSION_DENIED", "Microphone permission was not granted. You can still type commands.", null)
+        }
+    }
+
     override fun onDestroy() {
+        pendingVoiceResult = null
+        stopVoiceRecognition()
         offlineAiRuntime?.close()
         offlineAiRuntime = null
+        modelVerificationExecutor.shutdown()
         super.onDestroy()
     }
 

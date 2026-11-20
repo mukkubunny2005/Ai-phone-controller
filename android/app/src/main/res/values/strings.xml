@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">AI Phone Controller</string>
-    <string name="accessibility_service_description">Optional service that detects which app is in the foreground. It does not read screen content or perform actions.</string>
+    <string name="accessibility_service_description">When enabled, reads accessible text and labels in the foreground app for user-requested automation. While YouTube is foregrounded, it also checks exposed titles, captions and labels for limited inappropriate-content text signals; on a match it displays a warning and exits to Home. This cannot identify video imagery and may miss content or produce false positives. It does not capture screenshots. Password, PIN, OTP and identifiable payment-detail fields are excluded. Taps, text entry, scrolling, Back, Home and settings navigation are performed only through user-requested actions with confirmation. Screen text is processed on this device.</string>
 </resources>
